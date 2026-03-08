@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bitcoin Node Optimizer Terminal</title>
+    <style>
+      :root {
+        --bg-1: #070b14;
+        --bg-2: #111a2e;
+        --card: rgba(17, 26, 46, 0.78);
+        --card-border: rgba(255, 255, 255, 0.08);
+        --text: #edf3ff;
+        --muted: #8fa3c4;
+        --btc: #f7931a;
+        --green: #43d487;
+        --red: #ff6b6b;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        color: var(--text);
+        font-family: "Space Grotesk", "Segoe UI", system-ui, sans-serif;
+        background:
+          radial-gradient(1200px 700px at 10% -5%, rgba(247, 147, 26, 0.17), transparent 55%),
+          radial-gradient(900px 600px at 100% 0%, rgba(77, 201, 255, 0.14), transparent 60%),
+          linear-gradient(140deg, var(--bg-1), var(--bg-2));
+        min-height: 100vh;
+      }
+      .wrap { width: min(1180px, 94vw); margin: 24px auto 36px; }
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+      .title h1 { margin: 0; font-size: clamp(1.3rem, 2.8vw, 2rem); }
+      .title p { margin: 4px 0 0; color: var(--muted); font-size: 0.94rem; }
+      .status {
+        border: 1px solid var(--card-border);
+        border-radius: 999px;
+        padding: 8px 12px;
+        font-size: 0.85rem;
+        color: var(--muted);
+        background: rgba(255, 255, 255, 0.03);
+      }
+      .status .dot {
+        display: inline-block;
+        width: 9px;
+        height: 9px;
+        border-radius: 999px;
+        background: var(--green);
+        margin-right: 8px;
+        box-shadow: 0 0 10px rgba(67, 212, 135, 0.7);
+        animation: pulse 1.4s infinite;
+      }
+      .api-key-row {
+        margin-top: 10px;
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .api-key-row input {
+        width: min(280px, 48vw);
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: var(--text);
+        border-radius: 10px;
+        padding: 8px 10px;
+      }
+      @keyframes pulse {
+        0% { transform: scale(0.95); opacity: 0.7; }
+        70% { transform: scale(1.05); opacity: 1; }
+        100% { transform: scale(0.95); opacity: 0.7; }
+      }
+      .grid-kpi { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--card-border);
+        border-radius: 16px;
+        backdrop-filter: blur(4px);
+      }
+      .kpi { padding: 14px 16px; }
+      .kpi .label { color: var(--muted); font-size: 0.82rem; margin-bottom: 8px; }
+      .kpi .value { font-size: clamp(1.25rem, 2.1vw, 1.8rem); font-weight: 700; }
+      .kpi .hint { margin-top: 6px; color: var(--muted); font-size: 0.76rem; }
+      .highlight { color: var(--btc); }
+      .good { color: var(--green); }
+      .grid-main { margin-top: 14px; display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+      .panel { padding: 14px; }
+      .panel h3 { margin: 0 0 12px; font-size: 0.98rem; }
+      .telemetry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+      .metric {
+        background: rgba(255, 255, 255, 0.02);
+        border: 1px solid rgba(255, 255, 255, 0.06);
+        border-radius: 12px;
+        padding: 10px;
+      }
+      .metric .m-label { font-size: 0.76rem; color: var(--muted); }
+      .metric .m-value { margin-top: 3px; font-size: 1.15rem; font-weight: 700; }
+      .spark { width: 100%; height: 200px; border-radius: 12px; background: rgba(255, 255, 255, 0.02); }
+      .rec-list { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+      .rec-item, .action-item {
+        padding: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .rec-head, .action-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+      .rec-title, .action-title { font-size: 0.9rem; font-weight: 600; }
+      .tag {
+        font-size: 0.72rem;
+        border-radius: 999px;
+        padding: 2px 8px;
+        border: 1px solid transparent;
+      }
+      .tag.high { color: #ffcfb5; border-color: rgba(255, 148, 92, 0.5); background: rgba(255, 148, 92, 0.15); }
+      .tag.med { color: #bde8ff; border-color: rgba(77, 201, 255, 0.5); background: rgba(77, 201, 255, 0.12); }
+      .tag.low { color: #bff6d4; border-color: rgba(67, 212, 135, 0.5); background: rgba(67, 212, 135, 0.12); }
+      .rec-body, .action-body { margin-top: 6px; color: var(--muted); font-size: 0.82rem; line-height: 1.45; }
+      .rec-save, .action-save { margin-top: 7px; font-size: 0.8rem; color: var(--green); }
+      .sim-grid, .action-grid { margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .sim-form { display: grid; gap: 10px; }
+      .sim-form label, .inline-label { display: block; font-size: 0.78rem; color: var(--muted); margin-bottom: 4px; }
+      .input, .select {
+        width: 100%;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        color: var(--text);
+        border-radius: 10px;
+        padding: 10px;
+      }
+      .check-wrap { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+      .sim-result-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 8px; }
+      .sim-note-list, .steps-list { margin: 10px 0 0; padding-left: 18px; color: var(--muted); font-size: 0.82rem; }
+      .steps-title { margin-top: 8px; font-size: 0.78rem; color: var(--muted); }
+      .footer {
+        margin-top: 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        color: var(--muted);
+        font-size: 0.8rem;
+      }
+      .btn {
+        appearance: none;
+        border: 0;
+        border-radius: 10px;
+        padding: 9px 12px;
+        font-weight: 700;
+        cursor: pointer;
+        color: #151515;
+        background: linear-gradient(120deg, #f6b55f, #f7931a);
+      }
+      @media (max-width: 980px) {
+        .grid-kpi { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .grid-main, .sim-grid, .action-grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="wrap">
+      <section class="header">
+        <div class="title">
+          <h1>Bitcoin Node Cost Optimizer Terminal</h1>
+          <p>Live telemetry, cost, simulation</p>
+          <div class="api-key-row">
+            <input id="apiKeyInput" type="password" placeholder="READ API key for dashboard (optional)" />
+            <button class="btn" onclick="saveApiKey()">Save Key</button>
+          </div>
+        </div>
+        <div class="status" id="status"><span class="dot"></span>Connecting...</div>
+      </section>
+
+      <section class="grid-kpi">
+        <article class="card kpi"><div class="label">Current Cost</div><div class="value highlight" id="currentCost">-</div><div class="hint">Baseline</div></article>
+        <article class="card kpi"><div class="label">Optimized Cost</div><div class="value" id="optimizedCost">-</div><div class="hint">After optimization</div></article>
+        <article class="card kpi"><div class="label">Savings</div><div class="value good" id="savingsUsd">-</div><div class="hint">Monthly reduction</div></article>
+        <article class="card kpi"><div class="label">Savings %</div><div class="value good" id="savingsPct">-</div><div class="hint">Efficiency</div></article>
+      </section>
+
+      <section class="grid-main">
+        <article class="card panel">
+          <h3>Node Telemetry</h3>
+          <div class="telemetry-grid">
+            <div class="metric"><div class="m-label">CPU</div><div class="m-value" id="cpu">-</div></div>
+            <div class="metric"><div class="m-label">RAM</div><div class="m-value" id="ram">-</div></div>
+            <div class="metric"><div class="m-label">RPC p95</div><div class="m-value" id="rpc">-</div></div>
+            <div class="metric"><div class="m-label">Sync Lag</div><div class="m-value" id="lag">-</div></div>
+            <div class="metric"><div class="m-label">Disk I/O</div><div class="m-value" id="diskIo">-</div></div>
+            <div class="metric"><div class="m-label">Mempool Tx</div><div class="m-value" id="mempool">-</div></div>
+          </div>
+          <h3 style="margin-top: 14px;">CPU / RAM Trend</h3>
+          <canvas class="spark" id="trendChart" width="760" height="200"></canvas>
+        </article>
+        <article class="card panel">
+          <h3>Recommendations</h3>
+          <ul class="rec-list" id="recommendations"></ul>
+        </article>
+      </section>
+
+      <section class="sim-grid">
+        <article class="card panel">
+          <h3>Simulator</h3>
+          <div class="sim-form">
+            <div><label for="tier">Instance Tier</label><select id="tier" class="select"><option value="small">Small</option><option value="medium">Medium</option><option value="large">Large</option></select></div>
+            <div><label for="workload">Profile</label><select id="workload" class="select"><option value="balanced">Balanced</option><option value="idle">Idle</option><option value="sync">Initial Sync</option><option value="high_rpc">High RPC</option></select></div>
+            <div><label for="dbcache">dbcache (MB)</label><input id="dbcache" class="input" type="number" min="300" max="16384" value="1024" /></div>
+            <label class="check-wrap"><input id="pruning" type="checkbox" checked /><span>Pruning</span></label>
+            <button class="btn" onclick="runSimulation()">Run Simulation</button>
+          </div>
+        </article>
+        <article class="card panel">
+          <h3>Simulation</h3>
+          <div class="sim-result-grid">
+            <div class="metric"><div class="m-label">Baseline Cost</div><div class="m-value" id="simBaseCost">-</div></div>
+            <div class="metric"><div class="m-label">Simulated Cost</div><div class="m-value" id="simNewCost">-</div></div>
+            <div class="metric"><div class="m-label">Cost Delta</div><div class="m-value" id="simSaveUsd">-</div></div>
+            <div class="metric"><div class="m-label">Savings %</div><div class="m-value" id="simSavePct">-</div></div>
+            <div class="metric"><div class="m-label">RPC p95</div><div class="m-value" id="simRpc">-</div></div>
+            <div class="metric"><div class="m-label">Sync Lag</div><div class="m-value" id="simLag">-</div></div>
+          </div>
+          <ul class="sim-note-list" id="simNotes"></ul>
+        </article>
+      </section>
+
+      <section class="action-grid">
+        <article class="card panel">
+          <h3>Action Plan</h3>
+          <div class="sim-form">
+            <div><label for="mw">Maintenance Window</label><select id="mw" class="select"><option value="off_peak">Off-Peak</option><option value="immediate">Immediate</option></select></div>
+            <label class="check-wrap"><input id="includeHighRisk" type="checkbox" /><span>Include high-risk</span></label>
+            <button class="btn" onclick="generateActionPlan()">Generate Plan</button>
+          </div>
+          <div class="action-body" id="actionSummary" style="margin-top:10px;">No plan yet.</div>
+          <div class="action-save" id="actionSavings"></div>
+        </article>
+        <article class="card panel">
+          <h3>Plan Steps</h3>
+          <ul class="rec-list" id="actionList"></ul>
+        </article>
+      </section>
+
+      <section class="footer">
+        <span id="lastUpdated">Updated: -</span>
+        <button class="btn" onclick="refreshAll()">Refresh Now</button>
+      </section>
+    </main>
+
+    <script>
+      const FALLBACK_BASE = "http://127.0.0.1:8765";
+      const qs = new URLSearchParams(window.location.search);
+      const urlApiKey = qs.get("read_api_key") || qs.get("api_key") || "";
+      let apiBase = "";
+      let apiKey = urlApiKey || localStorage.getItem("btc_optimizer_api_key") || "";
+
+      function fmtMoney(value) { return `$${Number(value).toFixed(2)}`; }
+      function fmtPct(value) { return `${Number(value).toFixed(2)}%`; }
+
+      function saveApiKey() {
+        const value = document.getElementById("apiKeyInput").value || "";
+        apiKey = value.trim();
+        localStorage.setItem("btc_optimizer_api_key", apiKey);
+      }
+
+      function authHeaders(extraHeaders = {}) {
+        const headers = { "Content-Type": "application/json", ...extraHeaders };
+        if (apiKey) headers["X-API-Key"] = apiKey;
+        return headers;
+      }
+
+      async function apiRequest(path, options = {}) {
+        const tries = [];
+        if (apiBase) tries.push(`${apiBase}${path}`);
+        tries.push(`/api${path}`);
+        tries.push(`${FALLBACK_BASE}${path}`);
+
+        let lastErr = null;
+        for (const url of tries) {
+          try {
+            const res = await fetch(url, {
+              cache: "no-store",
+              headers: authHeaders(options.headers || {}),
+              ...options,
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            if (url.startsWith("http")) {
+              const u = new URL(url);
+              apiBase = `${u.protocol}//${u.host}`;
+            } else if (url.startsWith("/api")) {
+              apiBase = "/api";
+            }
+            return data;
+          } catch (err) {
+            lastErr = err;
+          }
+        }
+        throw lastErr || new Error("Unable to reach API");
+      }
+
+      function setStatus(ok, text) {
+        const status = document.getElementById("status");
+        status.innerHTML = `<span class="dot"></span>${text}`;
+        status.style.borderColor = ok ? "rgba(67,212,135,0.35)" : "rgba(255,107,107,0.35)";
+      }
+
+      function severityTag(saving) { return saving >= 15 ? "high" : "med"; }
+
+      function renderRecommendations(recs) {
+        const root = document.getElementById("recommendations");
+        root.innerHTML = "";
+        for (const rec of recs) {
+          const li = document.createElement("li");
+          const level = severityTag(rec.estimated_monthly_savings_usd);
+          li.className = "rec-item";
+          li.innerHTML = `<div class="rec-head"><div class="rec-title">${rec.title}</div><span class="tag ${level}">${level === "high" ? "High" : "Med"}</span></div><div class="rec-save">Save ${fmtMoney(rec.estimated_monthly_savings_usd)}/mo</div>`;
+          root.appendChild(li);
+        }
+      }
+
+      function drawTrend(canvas, points) {
+        const ctx = canvas.getContext("2d");
+        const w = canvas.width;
+        const h = canvas.height;
+        ctx.clearRect(0, 0, w, h);
+        if (!points.length) return;
+        const pad = 16;
+        const usableW = w - pad * 2;
+        const usableH = h - pad * 2;
+        const cpuVals = points.map((p) => p.cpu_percent);
+        const ramVals = points.map((p) => p.ram_percent);
+        const maxV = Math.max(100, ...cpuVals, ...ramVals);
+        const xAt = (i) => pad + (i / Math.max(1, points.length - 1)) * usableW;
+        const yAt = (v) => pad + (1 - v / maxV) * usableH;
+
+        ctx.strokeStyle = "rgba(255,255,255,0.08)";
+        ctx.lineWidth = 1;
+        for (let i = 1; i <= 4; i++) {
+          const y = pad + (usableH / 4) * i;
+          ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(w - pad, y); ctx.stroke();
+        }
+
+        const drawLine = (vals, color) => {
+          ctx.beginPath();
+          vals.forEach((v, i) => {
+            const x = xAt(i); const y = yAt(v);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          });
+          ctx.strokeStyle = color; ctx.lineWidth = 2.2; ctx.stroke();
+        };
+
+        drawLine(cpuVals, "#f7931a");
+        drawLine(ramVals, "#4dc9ff");
+      }
+
+      function renderSimulation(result) {
+        document.getElementById("simBaseCost").textContent = fmtMoney(result.baseline_monthly_cost_usd);
+        document.getElementById("simNewCost").textContent = fmtMoney(result.simulated_monthly_cost_usd);
+
+        const deltaUsd = result.projected_monthly_savings_usd;
+        const deltaEl = document.getElementById("simSaveUsd");
+        deltaEl.textContent = fmtMoney(deltaUsd);
+        deltaEl.style.color = deltaUsd >= 0 ? "#43d487" : "#ff6b6b";
+
+        const deltaPct = result.projected_savings_percent;
+        const pctEl = document.getElementById("simSavePct");
+        pctEl.textContent = fmtPct(deltaPct);
+        pctEl.style.color = deltaPct >= 0 ? "#43d487" : "#ff6b6b";
+
+        document.getElementById("simRpc").textContent = `${result.baseline_rpc_p95_ms.toFixed(1)} -> ${result.simulated_rpc_p95_ms.toFixed(1)} ms`;
+        document.getElementById("simLag").textContent = `${result.baseline_sync_lag_blocks.toFixed(1)} -> ${result.simulated_sync_lag_blocks.toFixed(1)} blocks`;
+
+        const notes = document.getElementById("simNotes");
+        notes.innerHTML = "";
+        for (const note of result.notes || []) {
+          const li = document.createElement("li"); li.textContent = note; notes.appendChild(li);
+        }
+      }
+
+      async function runSimulation() {
+        try {
+          const payload = {
+            instance_tier: document.getElementById("tier").value,
+            workload_profile: document.getElementById("workload").value,
+            dbcache_mb: Number(document.getElementById("dbcache").value || 1024),
+            pruning_enabled: document.getElementById("pruning").checked,
+          };
+          const result = await apiRequest("/simulate", { method: "POST", body: JSON.stringify(payload) });
+          renderSimulation(result);
+        } catch (err) { console.error(err); }
+      }
+
+      function renderActionPlan(plan) {
+        document.getElementById("actionSummary").textContent = plan.summary;
+        document.getElementById("actionSavings").textContent = `Expected savings: ${fmtMoney(plan.expected_total_monthly_savings_usd)}`;
+
+        const list = document.getElementById("actionList");
+        list.innerHTML = "";
+        for (const action of plan.actions || []) {
+          const li = document.createElement("li");
+          li.className = "action-item";
+          li.innerHTML = `
+            <div class="action-head">
+              <div class="action-title">${action.title}</div>
+              <span class="tag ${action.risk === "low" ? "low" : action.risk === "medium" ? "med" : "high"}">${action.priority} / ${action.risk}</span>
+            </div>
+            <div class="action-save">Savings: ${fmtMoney(action.estimated_monthly_savings_usd)}/month</div>
+            <div class="steps-title">Apply</div>
+            <ul class="steps-list">${action.apply_steps.map((s) => `<li>${s}</li>`).join("")}</ul>
+            <div class="steps-title">Rollback</div>
+            <ul class="steps-list">${action.rollback_steps.map((s) => `<li>${s}</li>`).join("")}</ul>
+          `;
+          list.appendChild(li);
+        }
+      }
+
+      async function generateActionPlan() {
+        try {
+          const payload = {
+            maintenance_window: document.getElementById("mw").value,
+            include_high_risk: document.getElementById("includeHighRisk").checked,
+          };
+          const plan = await apiRequest("/actions/plan", { method: "POST", body: JSON.stringify(payload) });
+          renderActionPlan(plan);
+        } catch (err) {
+          console.error(err);
+          document.getElementById("actionSummary").textContent = "Failed to generate action plan.";
+        }
+      }
+
+      async function refreshAll() {
+        try {
+          const [summary, latest, recent] = await Promise.all([
+            apiRequest("/summary"),
+            apiRequest("/metrics/latest"),
+            apiRequest("/metrics/recent?limit=40"),
+          ]);
+
+          document.getElementById("currentCost").textContent = fmtMoney(summary.current_monthly_cost_usd);
+          document.getElementById("optimizedCost").textContent = fmtMoney(summary.optimized_monthly_cost_usd);
+          document.getElementById("savingsUsd").textContent = fmtMoney(summary.projected_monthly_savings_usd);
+          document.getElementById("savingsPct").textContent = fmtPct(summary.projected_savings_percent);
+
+          document.getElementById("cpu").textContent = `${latest.cpu_percent.toFixed(2)}%`;
+          document.getElementById("ram").textContent = `${latest.ram_percent.toFixed(2)}%`;
+          document.getElementById("rpc").textContent = `${latest.rpc_p95_ms.toFixed(2)} ms`;
+          document.getElementById("lag").textContent = `${latest.sync_lag_blocks} blocks`;
+          document.getElementById("diskIo").textContent = `${latest.disk_io_mb_s.toFixed(2)} MB/s`;
+          document.getElementById("mempool").textContent = `${latest.mempool_tx_count.toLocaleString()}`;
+
+          renderRecommendations(summary.recommendations || []);
+          drawTrend(document.getElementById("trendChart"), recent || []);
+
+          document.getElementById("lastUpdated").textContent = `Updated: ${new Date().toLocaleTimeString()}`;
+          setStatus(true, "Live");
+
+          await runSimulation();
+          await generateActionPlan();
+        } catch (err) {
+          setStatus(false, "API Unreachable");
+          document.getElementById("lastUpdated").textContent = `Updated: failed (${new Date().toLocaleTimeString()})`;
+          console.error(err);
+        }
+      }
+
+      document.getElementById("apiKeyInput").value = apiKey;
+      refreshAll();
+      setInterval(refreshAll, 7000);
+    </script>
+  </body>
+</html>
+

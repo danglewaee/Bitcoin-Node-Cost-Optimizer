@@ -1,0 +1,58 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: bitcoin_optimizer
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  api:
+    image: python:3.11-slim
+    working_dir: /app
+    command: bash -lc "pip install --no-cache-dir -r requirements.txt && uvicorn main:app --host 0.0.0.0 --port 8000"
+    volumes:
+      - ./api:/app
+    environment:
+      APP_ENV: development
+      READ_API_KEY: dev-read-key`r`n      WRITE_API_KEY: dev-write-key`r`n      ALLOWED_ORIGINS: http://127.0.0.1:8080,http://localhost:8080
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/bitcoin_optimizer
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+
+  collector:
+    image: python:3.11-slim
+    working_dir: /collector
+    command: bash -lc "pip install --no-cache-dir -r requirements.txt && python mock_collector.py"
+    volumes:
+      - ./collector:/collector
+    environment:
+      API_URL: http://api:8000
+      API_WRITE_KEY: dev-write-key
+      INTERVAL_SECONDS: 8
+    depends_on:
+      - api
+
+  dashboard:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./dashboard/index.html:/usr/share/nginx/html/index.html:ro
+      - ./dashboard/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+    ports:
+      - "8080:80"
+
+volumes:
+  pgdata:
+

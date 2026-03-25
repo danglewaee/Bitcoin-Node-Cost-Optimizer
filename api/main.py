@@ -1,26 +1,32 @@
 import os
 import secrets
+from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from action_engine import build_action_plan
-from cost_model import estimate_monthly_cost
 from database import Base, DATABASE_URL, engine, get_db
-from models import NodeMetric
-from optimizer import build_recommendations
+from models import PredictionSignal, PriceCandle
 from schemas import (
-    ActionPlanOut,
-    ActionPlanRequest,
-    MetricCreate,
-    MetricOut,
-    SimulationOut,
-    SimulationRequest,
-    SummaryOut,
+    ActionReadOut,
+    CandleCreate,
+    CandleOut,
+    MultiReadOut,
+    PerformanceBucketOut,
+    PredictionOut,
+    PredictionRequest,
+    SignalHistoryOut,
+    SignalPerformanceOut,
+    SignalStatsOut,
+    TrendSummaryOut,
 )
-from simulation import simulate_configuration
+from trend_engine import (
+    build_prediction,
+    build_trend_summary,
+    classify_realized_direction,
+    estimate_candle_interval,
+)
 
 DEFAULT_ALLOWED_ORIGINS = "http://127.0.0.1:8899,http://localhost:8899,http://127.0.0.1:8080,http://localhost:8080"
 
@@ -69,18 +75,231 @@ def _check_api_key(expected_key: str, x_api_key: str | None) -> None:
 
 
 def require_read_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
-    # In development, auth can be disabled by leaving READ_API_KEY empty.
     _check_api_key(READ_API_KEY, x_api_key)
 
 
 def require_write_api_key(x_api_key: str | None = Header(default=None, alias="X-API-Key")) -> None:
-    # In development, auth can be disabled by leaving WRITE_API_KEY empty.
     _check_api_key(WRITE_API_KEY, x_api_key)
+
+
+def get_recent_candles(db: Session, limit: int) -> list[PriceCandle]:
+    rows = db.query(PriceCandle).order_by(PriceCandle.timestamp.desc()).limit(limit).all()
+    return list(reversed(rows))
+
+
+def normalize_signal_source(source: str) -> str:
+    if source.startswith("mock-"):
+        return "mock"
+    return source
+
+
+def apply_signal_source_filter(query, signal_source: str):
+    if signal_source == "mock":
+        return query.filter(PriceCandle.source.like("mock-%"))
+    return query.filter(PriceCandle.source == signal_source)
+
+
+def resolve_prediction_outcomes(db: Session) -> None:
+    pending_signals = (
+        db.query(PredictionSignal)
+        .filter(PredictionSignal.outcome_status == "pending")
+        .order_by(PredictionSignal.generated_at.asc())
+        .all()
+    )
+
+    updated = False
+    for signal in pending_signals:
+        outcome_query = db.query(PriceCandle).filter(PriceCandle.timestamp >= signal.target_timestamp)
+        outcome_candle = apply_signal_source_filter(outcome_query, signal.source).order_by(PriceCandle.timestamp.asc()).first()
+
+        if outcome_candle is None:
+            continue
+
+        realized_direction = classify_realized_direction(signal.reference_price, outcome_candle.close_price)
+        if realized_direction == signal.direction:
+            outcome_status = "right"
+        elif realized_direction == "sideways" and signal.direction != "sideways":
+            outcome_status = "flat"
+        else:
+            outcome_status = "wrong"
+
+        signal.outcome_status = outcome_status
+        signal.resolved_direction = realized_direction
+        signal.resolved_price = outcome_candle.close_price
+        signal.realized_change_pct = round(
+            ((outcome_candle.close_price - signal.reference_price) / signal.reference_price) * 100.0,
+            2,
+        )
+        signal.resolved_at = outcome_candle.timestamp
+        updated = True
+
+    if updated:
+        db.commit()
+
+
+def build_signal_stats(rows: list[PredictionSignal]) -> SignalStatsOut:
+    sample_size = len(rows)
+    resolved = [row for row in rows if row.outcome_status != "pending"]
+    right_signals = sum(1 for row in resolved if row.outcome_status == "right")
+    wrong_signals = sum(1 for row in resolved if row.outcome_status == "wrong")
+    flat_signals = sum(1 for row in resolved if row.outcome_status == "flat")
+    pending_signals = sample_size - len(resolved)
+
+    hit_rate = round((right_signals / len(resolved)) * 100.0, 2) if resolved else 0.0
+    resolved_changes = [row.realized_change_pct for row in resolved if row.realized_change_pct is not None]
+    right_changes = [row.realized_change_pct for row in resolved if row.outcome_status == "right" and row.realized_change_pct is not None]
+    wrong_changes = [row.realized_change_pct for row in resolved if row.outcome_status == "wrong" and row.realized_change_pct is not None]
+
+    avg_resolved_change_pct = round(sum(resolved_changes) / len(resolved_changes), 2) if resolved_changes else 0.0
+    avg_right_change_pct = round(sum(right_changes) / len(right_changes), 2) if right_changes else None
+    avg_wrong_change_pct = round(sum(wrong_changes) / len(wrong_changes), 2) if wrong_changes else None
+
+    if sample_size == 0:
+        summary = "No saved reads yet. Run the action card and the recent edge panel will start building a score."
+    elif len(resolved) < 3:
+        summary = "The scorecard is still warming up. A few more resolved reads will make the recent edge more useful."
+    elif hit_rate >= 65:
+        summary = f"Recent reads are holding up well: {hit_rate:.0f}% of resolved calls landed correctly in the latest sample."
+    elif hit_rate <= 40:
+        summary = f"Recent reads are struggling: only {hit_rate:.0f}% of resolved calls landed correctly in the latest sample."
+    else:
+        summary = f"Recent reads are mixed: {hit_rate:.0f}% of resolved calls landed correctly, so use the action card with patience."
+
+    return SignalStatsOut(
+        sample_size=sample_size,
+        resolved_signals=len(resolved),
+        pending_signals=pending_signals,
+        right_signals=right_signals,
+        wrong_signals=wrong_signals,
+        flat_signals=flat_signals,
+        hit_rate=hit_rate,
+        avg_resolved_change_pct=avg_resolved_change_pct,
+        avg_right_change_pct=avg_right_change_pct,
+        avg_wrong_change_pct=avg_wrong_change_pct,
+        summary=summary,
+    )
+
+
+def build_performance_bucket(key: str, rows: list[PredictionSignal]) -> PerformanceBucketOut:
+    resolved = [row for row in rows if row.outcome_status != "pending"]
+    right = [row for row in resolved if row.outcome_status == "right"]
+    resolved_changes = [row.realized_change_pct for row in resolved if row.realized_change_pct is not None]
+    avg_change_pct = round(sum(resolved_changes) / len(resolved_changes), 2) if resolved_changes else 0.0
+    hit_rate = round((len(right) / len(resolved)) * 100.0, 2) if resolved else 0.0
+    return PerformanceBucketOut(
+        key=key,
+        total_signals=len(rows),
+        resolved_signals=len(resolved),
+        hit_rate=hit_rate,
+        avg_change_pct=avg_change_pct,
+    )
+
+
+def build_signal_performance(rows: list[PredictionSignal]) -> SignalPerformanceOut:
+    bias_groups: dict[str, list[PredictionSignal]] = {"long": [], "short": [], "neutral": []}
+    setup_groups: dict[str, list[PredictionSignal]] = {"A": [], "B": [], "C": []}
+
+    for row in rows:
+        bias_groups.setdefault(row.bias, []).append(row)
+        setup_groups.setdefault(row.setup_quality, []).append(row)
+
+    bias_breakdown = [build_performance_bucket(key, bias_groups[key]) for key in ["long", "short", "neutral"] if bias_groups.get(key)]
+    setup_breakdown = [build_performance_bucket(key, setup_groups[key]) for key in ["A", "B", "C"] if setup_groups.get(key)]
+
+    best_bias = max(bias_breakdown, key=lambda item: (item.hit_rate, item.resolved_signals), default=None)
+    best_setup = max(setup_breakdown, key=lambda item: (item.hit_rate, item.resolved_signals), default=None)
+
+    return SignalPerformanceOut(
+        sample_size=len(rows),
+        bias_breakdown=bias_breakdown,
+        setup_breakdown=setup_breakdown,
+        best_bias=best_bias.key if best_bias is not None else None,
+        best_setup_quality=best_setup.key if best_setup is not None else None,
+    )
+
+
+def build_action_read(label: str, candles: list[PriceCandle], lookback: int, forecast_horizon: int) -> ActionReadOut:
+    actual_lookback = min(max(12, lookback), len(candles))
+    prediction = build_prediction(candles=candles, lookback=actual_lookback, forecast_horizon=forecast_horizon)
+    return ActionReadOut(
+        label=label,
+        lookback=actual_lookback,
+        forecast_horizon=forecast_horizon,
+        direction=prediction.direction,
+        bias=prediction.bias,
+        setup_quality=prediction.setup_quality,
+        risk_level=prediction.risk_level,
+        probability_up=prediction.probability_up,
+        probability_down=prediction.probability_down,
+        summary=prediction.summary,
+        guidance=prediction.guidance,
+        what_to_watch=prediction.what_to_watch,
+    )
+
+
+def persist_prediction_signal(
+    db: Session,
+    candles: list[PriceCandle],
+    prediction: PredictionOut,
+) -> None:
+    latest_candle = candles[-1]
+    interval = estimate_candle_interval(candles)
+    target_timestamp = latest_candle.timestamp + (interval * prediction.forecast_horizon)
+    signal_source = normalize_signal_source(latest_candle.source)
+
+    signal = (
+        db.query(PredictionSignal)
+        .filter(
+            PredictionSignal.source == signal_source,
+            PredictionSignal.reference_timestamp == latest_candle.timestamp,
+            PredictionSignal.lookback == prediction.lookback,
+            PredictionSignal.forecast_horizon == prediction.forecast_horizon,
+        )
+        .first()
+    )
+
+    if signal is None:
+        signal = PredictionSignal(
+            generated_at=prediction.generated_at,
+            source=signal_source,
+            reference_timestamp=latest_candle.timestamp,
+            reference_price=latest_candle.close_price,
+            target_timestamp=target_timestamp,
+            lookback=prediction.lookback,
+            forecast_horizon=prediction.forecast_horizon,
+            direction=prediction.direction,
+            bias=prediction.bias,
+            probability_up=prediction.probability_up,
+            probability_down=prediction.probability_down,
+            confidence_score=prediction.confidence_score,
+            setup_quality=prediction.setup_quality,
+            risk_level=prediction.risk_level,
+            summary=prediction.summary,
+            guidance=prediction.guidance,
+            what_to_watch=prediction.what_to_watch,
+        )
+        db.add(signal)
+    else:
+        signal.reference_price = latest_candle.close_price
+        signal.target_timestamp = target_timestamp
+        signal.direction = prediction.direction
+        signal.bias = prediction.bias
+        signal.probability_up = prediction.probability_up
+        signal.probability_down = prediction.probability_down
+        signal.confidence_score = prediction.confidence_score
+        signal.setup_quality = prediction.setup_quality
+        signal.risk_level = prediction.risk_level
+        signal.summary = prediction.summary
+        signal.guidance = prediction.guidance
+        signal.what_to_watch = prediction.what_to_watch
+
+    db.commit()
+    resolve_prediction_outcomes(db)
 
 
 validate_environment()
 
-app = FastAPI(title="Bitcoin Node Cost & Performance Optimizer", version="0.8.1")
+app = FastAPI(title="Bitcoin Trend", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -95,137 +314,162 @@ Base.metadata.create_all(bind=engine)
 
 @app.get("/health")
 def health_check():
-    return {"status": "ok", "env": APP_ENV}
+    return {"status": "ok", "env": APP_ENV, "service": "bitcoin-trend"}
 
 
-@app.post("/metrics", response_model=MetricOut)
-def ingest_metric(
-    payload: MetricCreate,
+@app.post("/prices", response_model=CandleOut)
+def ingest_price_candle(
+    payload: CandleCreate,
     db: Session = Depends(get_db),
     _auth: None = Depends(require_write_api_key),
 ):
-    metric = NodeMetric(**payload.model_dump())
-    db.add(metric)
+    candle = None
+    if payload.timestamp is not None:
+        candle = (
+            db.query(PriceCandle)
+            .filter(
+                PriceCandle.source == payload.source,
+                PriceCandle.timestamp == payload.timestamp,
+            )
+            .first()
+        )
+
+    if candle is None:
+        candle = PriceCandle(**payload.model_dump(exclude_none=True))
+        db.add(candle)
+    else:
+        candle.open_price = payload.open_price
+        candle.high_price = payload.high_price
+        candle.low_price = payload.low_price
+        candle.close_price = payload.close_price
+        candle.volume_btc = payload.volume_btc
+
     db.commit()
-    db.refresh(metric)
-    return metric
+    db.refresh(candle)
+    resolve_prediction_outcomes(db)
+    return candle
 
 
-@app.delete("/metrics/reset")
-def reset_metrics(
+@app.delete("/prices/reset")
+def reset_price_candles(
     db: Session = Depends(get_db),
     _auth: None = Depends(require_write_api_key),
 ):
-    deleted = db.query(NodeMetric).delete()
+    deleted = db.query(PriceCandle).delete()
+    db.query(PredictionSignal).delete()
     db.commit()
     return {"deleted_rows": deleted}
 
 
-@app.get("/metrics/latest", response_model=MetricOut)
-def latest_metric(
+@app.get("/prices/latest", response_model=CandleOut)
+def latest_price_candle(
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
-    metric = db.query(NodeMetric).order_by(NodeMetric.timestamp.desc()).first()
-    if not metric:
-        raise HTTPException(status_code=404, detail="No metrics available")
-    return metric
+    candle = db.query(PriceCandle).order_by(PriceCandle.timestamp.desc()).first()
+    if not candle:
+        raise HTTPException(status_code=404, detail="No price candles available")
+    return candle
 
 
-@app.get("/metrics/recent", response_model=list[MetricOut])
-def recent_metrics(
-    limit: int = Query(default=40, ge=5, le=500),
+@app.get("/prices/recent", response_model=list[CandleOut])
+def recent_price_candles(
+    limit: int = Query(default=72, ge=12, le=500),
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
-    rows = db.query(NodeMetric).order_by(NodeMetric.timestamp.desc()).limit(limit).all()
-    return list(reversed(rows))
+    rows = get_recent_candles(db, limit)
+    if not rows:
+        raise HTTPException(status_code=404, detail="No price candles available")
+    return rows
 
 
-def get_metric_averages(db: Session):
-    row = (
-        db.query(
-            func.avg(NodeMetric.cpu_percent),
-            func.avg(NodeMetric.ram_percent),
-            func.avg(NodeMetric.disk_io_mb_s),
-            func.avg(NodeMetric.network_out_mb_s),
-            func.avg(NodeMetric.sync_lag_blocks),
-            func.avg(NodeMetric.disk_used_gb),
-            func.avg(NodeMetric.rpc_p95_ms),
+@app.get("/signals/recent", response_model=list[SignalHistoryOut])
+def recent_signals(
+    limit: int = Query(default=8, ge=1, le=50),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_read_api_key),
+):
+    resolve_prediction_outcomes(db)
+    rows = db.query(PredictionSignal).order_by(PredictionSignal.generated_at.desc()).limit(limit).all()
+    if not rows:
+        raise HTTPException(status_code=404, detail="No prediction signals available")
+    return rows
+
+
+@app.get("/signals/stats", response_model=SignalStatsOut)
+def signal_stats(
+    limit: int = Query(default=20, ge=1, le=200),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_read_api_key),
+):
+    resolve_prediction_outcomes(db)
+    rows = db.query(PredictionSignal).order_by(PredictionSignal.generated_at.desc()).limit(limit).all()
+    return build_signal_stats(rows)
+
+
+@app.get("/signals/performance", response_model=SignalPerformanceOut)
+def signal_performance(
+    limit: int = Query(default=60, ge=1, le=500),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_read_api_key),
+):
+    resolve_prediction_outcomes(db)
+    rows = db.query(PredictionSignal).order_by(PredictionSignal.generated_at.desc()).limit(limit).all()
+    return build_signal_performance(rows)
+
+
+@app.get("/trend/summary", response_model=TrendSummaryOut)
+@app.get("/summary", response_model=TrendSummaryOut)
+def trend_summary(
+    lookback: int = Query(default=48, ge=12, le=500),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_read_api_key),
+):
+    candles = get_recent_candles(db, lookback)
+    if not candles:
+        raise HTTPException(status_code=404, detail="No price candles available")
+    try:
+        return build_trend_summary(candles, lookback=lookback)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/predict", response_model=PredictionOut)
+def predict_direction(
+    payload: PredictionRequest,
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_read_api_key),
+):
+    candles = get_recent_candles(db, payload.lookback)
+    if not candles:
+        raise HTTPException(status_code=404, detail="No price candles available")
+    try:
+        prediction = build_prediction(
+            candles=candles,
+            lookback=payload.lookback,
+            forecast_horizon=payload.forecast_horizon,
         )
-        .select_from(NodeMetric)
-        .first()
-    )
-
-    if not row or row[0] is None:
-        raise HTTPException(status_code=404, detail="No metrics available")
-
-    avg_cpu, avg_ram, avg_disk_io, avg_network, avg_sync_lag, avg_disk_gb, avg_rpc_p95 = [float(v) for v in row]
-    return {
-        "avg_cpu": avg_cpu,
-        "avg_ram": avg_ram,
-        "avg_disk_io": avg_disk_io,
-        "avg_network": avg_network,
-        "avg_sync_lag": avg_sync_lag,
-        "avg_disk_gb": avg_disk_gb,
-        "avg_rpc_p95": avg_rpc_p95,
-    }
+        persist_prediction_signal(db, candles, prediction)
+        return prediction
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@app.get("/summary", response_model=SummaryOut)
-def summary(
+@app.get("/reads/multi", response_model=MultiReadOut)
+def multi_reads(
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
-    avg = get_metric_averages(db)
-    current = estimate_monthly_cost(avg["avg_cpu"], avg["avg_ram"], avg["avg_disk_gb"], avg["avg_network"])
+    candles = get_recent_candles(db, 72)
+    if not candles:
+        raise HTTPException(status_code=404, detail="No price candles available")
+    if len(candles) < 12:
+        raise HTTPException(status_code=400, detail="At least 12 candles are required to build multi-read action cards.")
 
-    recs = build_recommendations(avg["avg_cpu"], avg["avg_ram"], avg["avg_disk_gb"], avg["avg_sync_lag"])
-    rec_savings = sum(max(0.0, r.estimated_monthly_savings_usd) for r in recs)
-
-    optimized_total = max(0.0, current["total"] - rec_savings)
-    savings_percent = (rec_savings / current["total"] * 100.0) if current["total"] > 0 else 0.0
-
-    return SummaryOut(
-        current_monthly_cost_usd=current["total"],
-        optimized_monthly_cost_usd=round(optimized_total, 2),
-        projected_monthly_savings_usd=round(rec_savings, 2),
-        projected_savings_percent=round(savings_percent, 2),
-        recommendations=recs,
-    )
-
-
-@app.post("/simulate", response_model=SimulationOut)
-def simulate(
-    payload: SimulationRequest,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(require_read_api_key),
-):
-    avg = get_metric_averages(db)
-
-    return simulate_configuration(
-        avg_cpu=avg["avg_cpu"],
-        avg_ram=avg["avg_ram"],
-        avg_network_mb_s=avg["avg_network"],
-        avg_sync_lag=avg["avg_sync_lag"],
-        avg_disk_gb=avg["avg_disk_gb"],
-        avg_rpc_p95_ms=avg["avg_rpc_p95"],
-        request=payload,
-    )
-
-
-@app.post("/actions/plan", response_model=ActionPlanOut)
-def generate_action_plan(
-    payload: ActionPlanRequest,
-    db: Session = Depends(get_db),
-    _auth: None = Depends(require_read_api_key),
-):
-    avg = get_metric_averages(db)
-    recs = build_recommendations(avg["avg_cpu"], avg["avg_ram"], avg["avg_disk_gb"], avg["avg_sync_lag"])
-
-    return build_action_plan(
-        recommendations=recs,
-        request=payload,
-        avg_sync_lag=avg["avg_sync_lag"],
-        avg_rpc_p95=avg["avg_rpc_p95"],
-    )
+    reads = [
+        build_action_read("Fast", candles, lookback=24, forecast_horizon=3),
+        build_action_read("Core", candles, lookback=48, forecast_horizon=6),
+        build_action_read("Bigger Picture", candles, lookback=72, forecast_horizon=12),
+    ]
+    return MultiReadOut(generated_at=datetime.now(timezone.utc), reads=reads)

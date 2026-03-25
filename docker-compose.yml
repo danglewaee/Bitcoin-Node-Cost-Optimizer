@@ -2,18 +2,13 @@ services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_DB: bitcoin_optimizer
+      POSTGRES_DB: bitcoin_trend
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-
-  redis:
-    image: redis:7
-    ports:
-      - "6379:6379"
 
   api:
     image: python:3.11-slim
@@ -23,8 +18,10 @@ services:
       - ./api:/app
     environment:
       APP_ENV: development
-      READ_API_KEY: dev-read-key`r`n      WRITE_API_KEY: dev-write-key`r`n      ALLOWED_ORIGINS: http://127.0.0.1:8080,http://localhost:8080
-      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/bitcoin_optimizer
+      READ_API_KEY: dev-read-key
+      WRITE_API_KEY: dev-write-key
+      ALLOWED_ORIGINS: http://127.0.0.1:8080,http://localhost:8080
+      DATABASE_URL: postgresql+psycopg2://postgres:postgres@db:5432/bitcoin_trend
     depends_on:
       - db
     ports:
@@ -33,13 +30,23 @@ services:
   collector:
     image: python:3.11-slim
     working_dir: /collector
-    command: bash -lc "pip install --no-cache-dir -r requirements.txt && python mock_collector.py"
+    command: bash -lc "pip install --no-cache-dir -r requirements.txt && python collector.py"
     volumes:
       - ./collector:/collector
     environment:
+      COLLECTOR_MODE: mock
       API_URL: http://api:8000
       API_WRITE_KEY: dev-write-key
-      INTERVAL_SECONDS: 8
+      INTERVAL_SECONDS: 3
+      TREND_MODE: auto
+      START_PRICE_USD: 65000
+      BASE_VOLUME_BTC: 1200
+      VOLATILITY_PCT: 0.75
+      CANDLE_INTERVAL_MINUTES: 60
+      BOOTSTRAP_CANDLES: 72
+      MARKET_API_BASE_URL: https://api.exchange.coinbase.com
+      MARKET_PRODUCT_ID: BTC-USD
+      MARKET_SOURCE: coinbase-exchange
     depends_on:
       - api
 
@@ -55,4 +62,3 @@ services:
 
 volumes:
   pgdata:
-

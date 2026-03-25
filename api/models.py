@@ -1,19 +1,48 @@
-from sqlalchemy import Column, DateTime, Float, Integer
+from sqlalchemy import Column, DateTime, Float, Integer, String, UniqueConstraint
 from sqlalchemy.sql import func
 
 from database import Base
 
 
-class NodeMetric(Base):
-    __tablename__ = "node_metrics"
+class PriceCandle(Base):
+    __tablename__ = "price_candles"
 
     id = Column(Integer, primary_key=True, index=True)
-    cpu_percent = Column(Float, nullable=False)
-    ram_percent = Column(Float, nullable=False)
-    disk_io_mb_s = Column(Float, nullable=False)
-    network_out_mb_s = Column(Float, nullable=False)
-    rpc_p95_ms = Column(Float, nullable=False)
-    sync_lag_blocks = Column(Integer, nullable=False)
-    mempool_tx_count = Column(Integer, nullable=False)
-    disk_used_gb = Column(Float, nullable=False)
-    timestamp = Column(DateTime(timezone=True), server_default=func.now(), index=True)
+    open_price = Column(Float, nullable=False)
+    high_price = Column(Float, nullable=False)
+    low_price = Column(Float, nullable=False)
+    close_price = Column(Float, nullable=False)
+    volume_btc = Column(Float, nullable=False)
+    source = Column(String(64), nullable=False, default="mock")
+    timestamp = Column(DateTime(timezone=True), nullable=False, index=True, server_default=func.now())
+
+
+class PredictionSignal(Base):
+    __tablename__ = "prediction_signals"
+    __table_args__ = (
+        UniqueConstraint("source", "reference_timestamp", "lookback", "forecast_horizon", name="uq_signal_context"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    generated_at = Column(DateTime(timezone=True), nullable=False, index=True, server_default=func.now())
+    source = Column(String(64), nullable=False, default="mock", index=True)
+    reference_timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    reference_price = Column(Float, nullable=False)
+    target_timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
+    lookback = Column(Integer, nullable=False)
+    forecast_horizon = Column(Integer, nullable=False)
+    direction = Column(String(16), nullable=False)
+    bias = Column(String(16), nullable=False)
+    probability_up = Column(Float, nullable=False)
+    probability_down = Column(Float, nullable=False)
+    confidence_score = Column(Float, nullable=False)
+    setup_quality = Column(String(4), nullable=False)
+    risk_level = Column(String(16), nullable=False)
+    summary = Column(String(255), nullable=False)
+    guidance = Column(String(255), nullable=False)
+    what_to_watch = Column(String(255), nullable=False)
+    outcome_status = Column(String(16), nullable=False, default="pending", index=True)
+    resolved_direction = Column(String(16), nullable=True)
+    resolved_price = Column(Float, nullable=True)
+    realized_change_pct = Column(Float, nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)

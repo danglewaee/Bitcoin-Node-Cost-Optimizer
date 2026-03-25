@@ -2,7 +2,7 @@ import os
 import unittest
 
 os.environ.setdefault("APP_ENV", "test")
-os.environ.setdefault("DATABASE_URL", "sqlite:///./test_optimizer.db")
+os.environ.setdefault("DATABASE_URL", "sqlite:///./test_trend.db")
 os.environ.setdefault("READ_API_KEY", "")
 os.environ.setdefault("WRITE_API_KEY", "")
 os.environ.setdefault("ALLOWED_ORIGINS", "http://127.0.0.1:8899")
@@ -97,8 +97,18 @@ class ApiConfigAndAuthTests(unittest.TestCase):
             main.WRITE_API_KEY = old_key
 
     def test_routes_protected_in_p15_scope(self):
-        read_routes = {"/metrics/latest", "/metrics/recent", "/summary", "/simulate", "/actions/plan"}
-        write_routes = {"/metrics", "/metrics/reset"}
+        read_routes = {
+            "/prices/latest",
+            "/prices/recent",
+            "/summary",
+            "/trend/summary",
+            "/predict",
+            "/signals/recent",
+            "/signals/stats",
+            "/signals/performance",
+            "/reads/multi",
+        }
+        write_routes = {"/prices", "/prices/reset"}
 
         route_deps = {}
         for route in main.app.routes:

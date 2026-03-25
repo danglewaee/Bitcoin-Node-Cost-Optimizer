@@ -1,36 +1,44 @@
-# Bitcoin Node Cost & Performance Optimizer (MVP)
+# Bitcoin Trend
 
-MVP for monitoring Bitcoin-node-like workloads, estimating monthly cloud cost, and generating optimization recommendations.
+MVP for ingesting Bitcoin price candles, extracting trend features, and predicting whether the next move is more likely to go up, down, or sideways.
 
 ## Stack
-- FastAPI + SQLAlchemy (SQLite local / PostgreSQL optional)
-- Smart collector (bitcoind RPC with mock fallback)
-- Benchmark runner (idle / initial-sync / high-rpc)
-- Terminal-style dashboard with simulation and action engine
-- Docker Compose (optional)
+- FastAPI + SQLAlchemy
+- Collector modes for synthetic candles or real BTC-USD market candles
+- Trend engine based on moving averages, momentum, volatility, and volume confirmation
+- Browser dashboard for price trend and directional forecast
+- Docker Compose and CI
 
 ## Environment
 ### API (`api/.env.example`)
 - `APP_ENV` = `development` | `test` | `production`
-- `DATABASE_URL` (SQLite local by default)
-- `READ_API_KEY` (read/simulation/action endpoints)
-- `WRITE_API_KEY` (metric ingest/reset endpoints)
-- `ALLOWED_ORIGINS` (comma-separated CORS allowlist)
+- `DATABASE_URL`
+- `READ_API_KEY` for summary and prediction endpoints
+- `WRITE_API_KEY` for candle ingestion/reset endpoints
+- `ALLOWED_ORIGINS` as a comma-separated CORS allowlist
 
 In `production`:
 - `DATABASE_URL` must not be SQLite
-- `READ_API_KEY` is required and should be >= 16 chars
-- `WRITE_API_KEY` is required and should be >= 16 chars
-- `ALLOWED_ORIGINS` must be explicit origins (no `*`)
+- `READ_API_KEY` and `WRITE_API_KEY` should each be at least 16 characters
+- `ALLOWED_ORIGINS` must be explicit origins, not `*`
 
 ### Collector (`collector/.env.example`)
+- `COLLECTOR_MODE` = `mock` | `market`
 - `API_URL`
-- `API_WRITE_KEY` (set this to match API `WRITE_API_KEY`)
+- `API_WRITE_KEY`
 - `INTERVAL_SECONDS`
-- `COLLECTOR_MODE` = `auto` | `mock` | `rpc`
+- `TREND_MODE` = `auto` | `bull` | `bear` | `sideways`
+- `START_PRICE_USD`
+- `BASE_VOLUME_BTC`
+- `VOLATILITY_PCT`
+- `CANDLE_INTERVAL_MINUTES`
+- `BOOTSTRAP_CANDLES`
+- `MARKET_API_BASE_URL`
+- `MARKET_PRODUCT_ID`
+- `MARKET_SOURCE`
 
-## Quick start (recommended: local, no Docker)
-1. Install local API deps:
+## Quick start
+1. Install API dependencies:
    ```bash
    pip install -r api/requirements-local.txt
    ```
@@ -41,54 +49,76 @@ In `production`:
    set ALLOWED_ORIGINS=http://127.0.0.1:8899,http://localhost:8899
    uvicorn main:app --app-dir api --host 127.0.0.1 --port 8765 --reload
    ```
-3. Start collector:
+3. Start the collector in mock mode:
    ```bash
+   set COLLECTOR_MODE=mock
    set API_URL=http://127.0.0.1:8765
    set API_WRITE_KEY=dev-write-key
-   python collector/mock_collector.py
+   set TREND_MODE=auto
+   set BOOTSTRAP_CANDLES=72
+   python collector/collector.py
    ```
-4. Start dashboard server:
+4. Or start the collector in real-market mode with Coinbase BTC-USD candles:
+   ```bash
+   set COLLECTOR_MODE=market
+   set API_URL=http://127.0.0.1:8765
+   set API_WRITE_KEY=dev-write-key
+   set INTERVAL_SECONDS=60
+   set CANDLE_INTERVAL_MINUTES=60
+   set BOOTSTRAP_CANDLES=72
+   set MARKET_API_BASE_URL=https://api.exchange.coinbase.com
+   set MARKET_PRODUCT_ID=BTC-USD
+   python collector/collector.py
+   ```
+5. Start the dashboard:
    ```bash
    python -m http.server 8899 -d dashboard
    ```
-5. Open: http://127.0.0.1:8899
-6. In dashboard, enter `READ_API_KEY` (or open with `?read_api_key=dev-read-key`).
+6. Open `http://127.0.0.1:8899` and enter `dev-read-key`.
 
-## Action Engine
-Generate executable change plans with rollback steps.
-
-Manual API example:
-```bash
-curl -X POST http://127.0.0.1:8765/actions/plan \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: dev-read-key" \
-  -d '{"maintenance_window":"off_peak","include_high_risk":false}'
-```
-
-Response includes:
-- prioritized actions (`P1/P2/P3`)
-- risk levels (`low/medium/high`)
-- apply steps
-- rollback steps
-- expected monthly savings
+Notes for market mode:
+- `CANDLE_INTERVAL_MINUTES` currently supports `1`, `5`, `15`, `60`, `360`, and `1440`
+- The API ingests live candles idempotently by `source + timestamp`, so re-polling the current market bucket updates the same candle instead of duplicating rows
+- `market_collector.py` uses Coinbase Exchange public candles for BTC-USD and does not require a Coinbase API key for read-only market data
 
 ## Main endpoints
-- `POST /metrics` (`WRITE_API_KEY`)
-- `DELETE /metrics/reset` (`WRITE_API_KEY`)
-- `GET /metrics/latest` (`READ_API_KEY`)
-- `GET /metrics/recent?limit=40` (`READ_API_KEY`)
-- `GET /summary` (`READ_API_KEY`)
-- `POST /simulate` (`READ_API_KEY`)
-- `POST /actions/plan` (`READ_API_KEY`)
-- `GET /health` (public)
+- `POST /prices` with `WRITE_API_KEY`
+- `DELETE /prices/reset` with `WRITE_API_KEY`
+- `GET /prices/latest` with `READ_API_KEY`
+- `GET /prices/recent?limit=72` with `READ_API_KEY`
+- `GET /trend/summary?lookback=48` with `READ_API_KEY`
+- `POST /predict` with `READ_API_KEY`
+- `GET /signals/recent?limit=8` with `READ_API_KEY`
+- `GET /signals/stats?limit=20` with `READ_API_KEY`
+- `GET /signals/performance?limit=60` with `READ_API_KEY`
+- `GET /reads/multi` with `READ_API_KEY`
+- `GET /health`
+
+`/signals/recent` returns the recent prediction scorecard, including whether each saved signal is still open or later resolved as right, wrong, or flat.
+`/signals/stats` returns a lightweight recent-edge summary, including hit rate, resolved reads, open reads, and a short user-facing summary of how the latest sample is performing.
+`/signals/performance` returns recent resolved performance split by bias and setup quality so the action card can show which reads have been working better lately.
+`/reads/multi` returns three user-facing action reads: `Fast`, `Core`, and `Bigger Picture`.
+
+Example prediction request:
+```bash
+curl -X POST http://127.0.0.1:8765/predict \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: dev-read-key" \
+  -d '{"lookback":48,"forecast_horizon":6}'
+```
 
 ## Benchmarks
-Run benchmark with split keys:
+Run the API benchmark:
 ```bash
 python benchmarks/run_benchmarks.py --api-url http://127.0.0.1:8765 --read-key dev-read-key --write-key dev-write-key
 ```
 
-## Basic test run
+Run the offline benchmark:
+```bash
+python benchmarks/run_offline_benchmarks.py
+```
+
+## Test
 ```bash
 cd api
 python -m unittest discover -s tests -p "test_*.py" -v

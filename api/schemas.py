@@ -168,3 +168,40 @@ class SignalPerformanceOut(BaseModel):
     setup_breakdown: list[PerformanceBucketOut]
     best_bias: str | None = None
     best_setup_quality: str | None = None
+
+
+class BacktestRunOut(BaseModel):
+    reference_timestamp: datetime
+    target_timestamp: datetime
+    direction: Literal["up", "down", "sideways"]
+    bias: Literal["long", "short", "neutral"]
+    setup_quality: Literal["A", "B", "C"]
+    risk_level: Literal["low", "medium", "high"]
+    confidence_score: float
+    entry_level: float | None = None
+    invalidation_level: float | None = None
+    target_level: float | None = None
+    risk_reward_ratio: float | None = None
+    realized_direction: Literal["up", "down", "sideways"]
+    realized_change_pct: float
+    strategy_return_pct: float
+    outcome_status: Literal["right", "wrong", "flat"]
+
+
+class BacktestReportOut(BaseModel):
+    lookback: int
+    forecast_horizon: int
+    sample_size: int
+    hit_rate: float
+    wrong_rate: float
+    flat_rate: float
+    avg_realized_change_pct: float
+    avg_strategy_return_pct: float
+    cumulative_strategy_return_pct: float
+    max_drawdown_pct: float
+    avg_confidence_score: float
+    avg_risk_reward_ratio: float | None = None
+    long_hit_rate: float
+    short_hit_rate: float
+    summary: str
+    runs: list[BacktestRunOut]

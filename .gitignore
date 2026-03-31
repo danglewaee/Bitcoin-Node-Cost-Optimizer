@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 .venv*/
 *.db
+*.db-journal
 .pytest_cache/
 benchmarks/output*/
 runtime/logs/

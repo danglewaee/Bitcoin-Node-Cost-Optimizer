@@ -11,6 +11,8 @@ from database import Base, DATABASE_URL, engine, get_db
 from models import PredictionSignal, PriceCandle
 from schemas import (
     ActionReadOut,
+    BacktestReportOut,
+    BacktestRunOut,
     CandleCreate,
     CandleOut,
     MultiReadOut,
@@ -216,6 +218,148 @@ def build_signal_performance(rows: list[PredictionSignal]) -> SignalPerformanceO
         setup_breakdown=setup_breakdown,
         best_bias=best_bias.key if best_bias is not None else None,
         best_setup_quality=best_setup.key if best_setup is not None else None,
+    )
+
+
+def calculate_directional_hit_rate(runs: list[BacktestRunOut], bias: str | None = None) -> float:
+    filtered = [run for run in runs if bias is None or run.bias == bias]
+    if not filtered:
+        return 0.0
+    right_runs = sum(1 for run in filtered if run.outcome_status == "right")
+    return round((right_runs / len(filtered)) * 100.0, 2)
+
+
+def calculate_strategy_return(bias: str, realized_change_pct: float) -> float:
+    if bias == "long":
+        return realized_change_pct
+    if bias == "short":
+        return round(-realized_change_pct, 2)
+    return 0.0
+
+
+def calculate_max_drawdown(strategy_returns: list[float]) -> float:
+    equity_curve = 0.0
+    peak_equity = 0.0
+    max_drawdown = 0.0
+    for strategy_return in strategy_returns:
+        equity_curve += strategy_return
+        peak_equity = max(peak_equity, equity_curve)
+        max_drawdown = max(max_drawdown, peak_equity - equity_curve)
+    return round(max_drawdown, 2)
+
+
+def build_backtest_report(
+    candles: list[PriceCandle],
+    lookback: int,
+    forecast_horizon: int,
+    sample_size: int,
+) -> BacktestReportOut:
+    minimum_candles = lookback + forecast_horizon + 1
+    if len(candles) < minimum_candles:
+        raise ValueError(
+            f"At least {minimum_candles} candles are required for a backtest with lookback={lookback} and horizon={forecast_horizon}."
+        )
+
+    eligible_end_indexes = list(range(lookback - 1, len(candles) - forecast_horizon))
+    if not eligible_end_indexes:
+        raise ValueError("Not enough historical windows are available for the requested backtest.")
+
+    active_indexes = eligible_end_indexes[-sample_size:]
+    runs: list[BacktestRunOut] = []
+
+    for end_index in active_indexes:
+        history = candles[end_index - lookback + 1 : end_index + 1]
+        prediction = build_prediction(history, lookback=lookback, forecast_horizon=forecast_horizon)
+        reference_candle = history[-1]
+        outcome_candle = candles[end_index + forecast_horizon]
+        realized_direction = classify_realized_direction(reference_candle.close_price, outcome_candle.close_price)
+
+        if realized_direction == prediction.direction:
+            outcome_status = "right"
+        elif realized_direction == "sideways" and prediction.direction != "sideways":
+            outcome_status = "flat"
+        else:
+            outcome_status = "wrong"
+
+        realized_change_pct = round(
+            ((outcome_candle.close_price - reference_candle.close_price) / reference_candle.close_price) * 100.0,
+            2,
+        )
+        strategy_return_pct = calculate_strategy_return(prediction.bias, realized_change_pct)
+
+        runs.append(
+            BacktestRunOut(
+                reference_timestamp=reference_candle.timestamp,
+                target_timestamp=outcome_candle.timestamp,
+                direction=prediction.direction,
+                bias=prediction.bias,
+                setup_quality=prediction.setup_quality,
+                risk_level=prediction.risk_level,
+                confidence_score=prediction.confidence_score,
+                entry_level=prediction.entry_level,
+                invalidation_level=prediction.invalidation_level,
+                target_level=prediction.target_level,
+                risk_reward_ratio=prediction.risk_reward_ratio,
+                realized_direction=realized_direction,
+                realized_change_pct=realized_change_pct,
+                strategy_return_pct=strategy_return_pct,
+                outcome_status=outcome_status,
+            )
+        )
+
+    right_runs = sum(1 for run in runs if run.outcome_status == "right")
+    wrong_runs = sum(1 for run in runs if run.outcome_status == "wrong")
+    flat_runs = sum(1 for run in runs if run.outcome_status == "flat")
+    sample_count = len(runs)
+    hit_rate = round((right_runs / sample_count) * 100.0, 2) if sample_count else 0.0
+    wrong_rate = round((wrong_runs / sample_count) * 100.0, 2) if sample_count else 0.0
+    flat_rate = round((flat_runs / sample_count) * 100.0, 2) if sample_count else 0.0
+    avg_realized_change_pct = round(sum(run.realized_change_pct for run in runs) / sample_count, 2) if sample_count else 0.0
+    strategy_returns = [run.strategy_return_pct for run in runs]
+    avg_strategy_return_pct = round(sum(strategy_returns) / sample_count, 2) if sample_count else 0.0
+    cumulative_strategy_return_pct = round(sum(strategy_returns), 2)
+    max_drawdown_pct = calculate_max_drawdown(strategy_returns)
+    avg_confidence_score = round(sum(run.confidence_score for run in runs) / sample_count, 2) if sample_count else 0.0
+    rr_values = [run.risk_reward_ratio for run in runs if run.risk_reward_ratio is not None]
+    avg_risk_reward_ratio = round(sum(rr_values) / len(rr_values), 2) if rr_values else None
+    long_hit_rate = calculate_directional_hit_rate(runs, bias="long")
+    short_hit_rate = calculate_directional_hit_rate(runs, bias="short")
+
+    if sample_count < 12:
+        summary = "Backtest sample is still small, so use it as a confidence check rather than a final verdict."
+    elif hit_rate >= 60 and cumulative_strategy_return_pct > 0:
+        summary = (
+            f"Recent walk-forward reads are earning trust: {hit_rate:.0f}% hit rate with "
+            f"{cumulative_strategy_return_pct:.2f}% cumulative edge across the sample."
+        )
+    elif cumulative_strategy_return_pct < 0:
+        summary = (
+            f"Recent walk-forward reads are not earning trust yet: cumulative edge is "
+            f"{cumulative_strategy_return_pct:.2f}% across the latest sample."
+        )
+    else:
+        summary = (
+            f"Recent walk-forward reads are mixed: {hit_rate:.0f}% hit rate with "
+            f"{cumulative_strategy_return_pct:.2f}% cumulative edge."
+        )
+
+    return BacktestReportOut(
+        lookback=lookback,
+        forecast_horizon=forecast_horizon,
+        sample_size=sample_count,
+        hit_rate=hit_rate,
+        wrong_rate=wrong_rate,
+        flat_rate=flat_rate,
+        avg_realized_change_pct=avg_realized_change_pct,
+        avg_strategy_return_pct=avg_strategy_return_pct,
+        cumulative_strategy_return_pct=cumulative_strategy_return_pct,
+        max_drawdown_pct=max_drawdown_pct,
+        avg_confidence_score=avg_confidence_score,
+        avg_risk_reward_ratio=avg_risk_reward_ratio,
+        long_hit_rate=long_hit_rate,
+        short_hit_rate=short_hit_rate,
+        summary=summary,
+        runs=list(reversed(runs)),
     )
 
 
@@ -525,3 +669,26 @@ def multi_reads(
         build_action_read("Bigger Picture", candles, lookback=72, forecast_horizon=12),
     ]
     return MultiReadOut(generated_at=datetime.now(timezone.utc), reads=reads)
+
+
+@app.get("/backtest/report", response_model=BacktestReportOut)
+def backtest_report(
+    lookback: int = Query(default=48, ge=12, le=500),
+    forecast_horizon: int = Query(default=6, ge=1, le=72),
+    sample_size: int = Query(default=36, ge=5, le=240),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_read_api_key),
+):
+    required_candles = lookback + forecast_horizon + sample_size
+    candles = get_recent_candles(db, required_candles)
+    if not candles:
+        raise HTTPException(status_code=404, detail="No price candles available")
+    try:
+        return build_backtest_report(
+            candles=candles,
+            lookback=lookback,
+            forecast_horizon=forecast_horizon,
+            sample_size=sample_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -92,6 +92,7 @@ Notes for market mode:
 - `GET /signals/stats?limit=20` with `READ_API_KEY`
 - `GET /signals/performance?limit=60` with `READ_API_KEY`
 - `GET /reads/multi` with `READ_API_KEY`
+- `GET /backtest/report?lookback=48&forecast_horizon=6&sample_size=12` with `READ_API_KEY`
 - `GET /health`
 
 `/signals/recent` returns the recent prediction scorecard, including whether each saved signal is still open or later resolved as right, wrong, or flat.
@@ -100,6 +101,7 @@ Notes for market mode:
 `/reads/multi` returns three user-facing action reads: `Fast`, `Core`, and `Bigger Picture`.
 `/predict` and `/reads/multi` also return trader-facing action fields for `entry`, `invalidation`, `target`, and `risk_reward_ratio`.
 `/signals/recent` now stores those same trade-plan fields so the scorecard can keep the original setup context instead of only the directional bias.
+`/backtest/report` runs a recent walk-forward evaluation on historical candles and returns hit rate, edge, drawdown, confidence, and recent backtest runs so the UI can show whether the engine is earning trust.
 
 Example prediction request:
 ```bash

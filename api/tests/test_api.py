@@ -107,6 +107,7 @@ class ApiConfigAndAuthTests(unittest.TestCase):
             "/signals/stats",
             "/signals/performance",
             "/reads/multi",
+            "/backtest/report",
         }
         write_routes = {"/prices", "/prices/reset"}
 

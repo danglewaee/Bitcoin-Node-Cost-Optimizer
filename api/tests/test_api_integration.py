@@ -33,8 +33,8 @@ class ApiHttpIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.client.delete("/prices/reset", headers={"X-API-Key": "write-integration-key"})
 
-    def _seed_series(self) -> None:
-        for idx in range(18):
+    def _seed_series(self, total: int = 18) -> None:
+        for idx in range(total):
             close_price = 62000 + (idx * 350)
             response = self.client.post(
                 "/prices",
@@ -142,6 +142,25 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         self.assertIn("invalidation_plan", payload["reads"][0])
         self.assertIn("target_plan", payload["reads"][0])
         self.assertIn("risk_reward_ratio", payload["reads"][0])
+
+    def test_backtest_report_returns_walk_forward_metrics(self):
+        self._seed_series(total=24)
+
+        response = self.client.get(
+            "/backtest/report?lookback=12&forecast_horizon=3&sample_size=6",
+            headers={"X-API-Key": "read-integration-key"},
+        )
+        self.assertEqual(response.status_code, 200)
+
+        payload = response.json()
+        self.assertGreaterEqual(payload["sample_size"], 1)
+        self.assertIn("hit_rate", payload)
+        self.assertIn("cumulative_strategy_return_pct", payload)
+        self.assertIn("avg_risk_reward_ratio", payload)
+        self.assertTrue(payload["summary"])
+        self.assertGreaterEqual(len(payload["runs"]), 1)
+        self.assertIn("strategy_return_pct", payload["runs"][0])
+        self.assertIn("outcome_status", payload["runs"][0])
 
     def test_ingest_upserts_same_source_and_timestamp(self):
         timestamp = "2026-03-01T00:00:00Z"

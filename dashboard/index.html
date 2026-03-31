@@ -193,7 +193,7 @@
       }
       .view-switcher {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 12px;
       }
       .view-toggle {
@@ -525,6 +525,12 @@
         font-size: 0.78rem;
         text-align: right;
       }
+      .backtest-grid {
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 10px;
+      }
       .stats {
         margin-top: 16px;
         display: grid;
@@ -559,6 +565,9 @@
         .stats {
           grid-template-columns: repeat(3, minmax(0, 1fr));
         }
+        .backtest-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
       }
       @media (max-width: 720px) {
         .toolbar-grid,
@@ -567,6 +576,7 @@
         .performance-grid,
         .split-grid,
         .trade-grid,
+        .backtest-grid,
         .stats {
           grid-template-columns: 1fr;
         }
@@ -639,11 +649,16 @@
             <span class="view-title">Action Card</span>
             <span class="view-hint">See the best next step and how recent reads are performing.</span>
           </button>
+          <button class="view-toggle" id="showBacktestBtn" data-view="backtest" type="button">
+            <span class="view-kicker">Open View</span>
+            <span class="view-title">Backtest</span>
+            <span class="view-hint">See whether the engine has earned trust on recent candles.</span>
+          </button>
         </div>
 
         <article class="card view-empty" id="viewEmpty">
           <h2>Choose a view</h2>
-          <p>Pick the market read if you want context first, or the action card if you want the practical takeaway first.</p>
+          <p>Pick the market read for context, the action card for a live setup, or the backtest view if you want evidence first.</p>
         </article>
 
         <article class="card view-panel" id="panelTrend">
@@ -775,6 +790,32 @@
             </div>
           </div>
         </article>
+
+        <article class="card view-panel" id="panelBacktest">
+          <div class="card-head">
+            <div>
+              <h2>Backtest</h2>
+              <p class="card-note" id="backtestSummary">Waiting for a recent walk-forward report.</p>
+            </div>
+            <div class="badge" id="backtestBadge">Walk-forward</div>
+          </div>
+
+          <div class="backtest-grid">
+            <article class="mini"><div class="label">Sample</div><div class="value" id="backtestSample">-</div></article>
+            <article class="mini"><div class="label">Hit Rate</div><div class="value" id="backtestHitRate">-</div></article>
+            <article class="mini"><div class="label">Long Hit Rate</div><div class="value" id="backtestLongHitRate">-</div></article>
+            <article class="mini"><div class="label">Short Hit Rate</div><div class="value" id="backtestShortHitRate">-</div></article>
+            <article class="mini"><div class="label">Avg Edge / Read</div><div class="value" id="backtestAvgEdge">-</div></article>
+            <article class="mini"><div class="label">Cumulative Edge</div><div class="value" id="backtestCumEdge">-</div></article>
+            <article class="mini"><div class="label">Max Drawdown</div><div class="value" id="backtestMaxDd">-</div></article>
+            <article class="mini"><div class="label">Avg Reward / Risk</div><div class="value" id="backtestAvgRr">-</div></article>
+          </div>
+
+          <div class="history" style="margin-top: 16px;">
+            <div class="card-note">Recent backtest runs</div>
+            <div id="backtestRuns"></div>
+          </div>
+        </article>
       </section>
     </main>
 
@@ -791,6 +832,11 @@
 
       function fmtPct(value) {
         return `${Number(value).toFixed(2)}%`;
+      }
+
+      function fmtSignedPct(value) {
+        const number = Number(value || 0);
+        return `${number >= 0 ? "+" : ""}${number.toFixed(2)}%`;
       }
 
       function fmtTradeLevel(value, fallback = "WAIT") {
@@ -1108,10 +1154,78 @@
         }
       }
 
+      function renderBacktest(report) {
+        if (!report) {
+          document.getElementById("backtestBadge").textContent = "Not Ready";
+          document.getElementById("backtestSummary").textContent = "Backtest will appear once there is enough candle history for a walk-forward run.";
+          document.getElementById("backtestSample").textContent = "-";
+          document.getElementById("backtestHitRate").textContent = "-";
+          document.getElementById("backtestLongHitRate").textContent = "-";
+          document.getElementById("backtestShortHitRate").textContent = "-";
+          document.getElementById("backtestAvgEdge").textContent = "-";
+          document.getElementById("backtestCumEdge").textContent = "-";
+          document.getElementById("backtestMaxDd").textContent = "-";
+          document.getElementById("backtestAvgRr").textContent = "-";
+          document.getElementById("backtestRuns").innerHTML = "<div class=\"history-copy\">Not enough historical candles yet for a trust report.</div>";
+          return;
+        }
+
+        document.getElementById("backtestBadge").textContent = `${report.sample_size} runs`;
+        document.getElementById("backtestSummary").textContent = report.summary;
+        document.getElementById("backtestSample").textContent = `${report.sample_size}`;
+        document.getElementById("backtestHitRate").textContent = `${Number(report.hit_rate || 0).toFixed(0)}%`;
+        document.getElementById("backtestLongHitRate").textContent = `${Number(report.long_hit_rate || 0).toFixed(0)}%`;
+        document.getElementById("backtestShortHitRate").textContent = `${Number(report.short_hit_rate || 0).toFixed(0)}%`;
+        document.getElementById("backtestAvgEdge").textContent = fmtSignedPct(report.avg_strategy_return_pct || 0);
+        document.getElementById("backtestCumEdge").textContent = fmtSignedPct(report.cumulative_strategy_return_pct || 0);
+        document.getElementById("backtestMaxDd").textContent = fmtPct(report.max_drawdown_pct || 0);
+        document.getElementById("backtestAvgRr").textContent = fmtRiskReward(report.avg_risk_reward_ratio);
+
+        const history = document.getElementById("backtestRuns");
+        history.innerHTML = "";
+
+        (report.runs || []).slice(0, 8).forEach((run) => {
+          const row = document.createElement("div");
+          row.className = "history-row";
+
+          const status = document.createElement("div");
+          status.className = `history-status ${run.outcome_status}`;
+          status.textContent = outcomeLabel(run.outcome_status);
+
+          const main = document.createElement("div");
+          main.className = "history-main";
+
+          const title = document.createElement("div");
+          title.className = "history-title";
+          title.textContent = `${biasLabel(run.bias, run.direction)} - ${run.setup_quality} setup`;
+
+          const copy = document.createElement("div");
+          copy.className = "history-copy";
+          copy.textContent = `${fmtSignedPct(run.strategy_return_pct)} edge | realized ${fmtPct(run.realized_change_pct)} | ${fmtRiskReward(run.risk_reward_ratio)}`;
+
+          main.appendChild(title);
+          main.appendChild(copy);
+
+          const meta = document.createElement("div");
+          meta.className = "history-meta";
+          meta.innerHTML = `${new Date(run.reference_timestamp).toLocaleDateString()}<br>${run.risk_level.toUpperCase()} risk`;
+
+          row.appendChild(status);
+          row.appendChild(main);
+          row.appendChild(meta);
+          history.appendChild(row);
+        });
+
+        if (!history.childElementCount) {
+          history.innerHTML = "<div class=\"history-copy\">No walk-forward runs available yet.</div>";
+        }
+      }
+
       function setActiveView(view, updateHash = true) {
         const emptyState = document.getElementById("viewEmpty");
         const trendPanel = document.getElementById("panelTrend");
         const forecastPanel = document.getElementById("panelForecast");
+        const backtestPanel = document.getElementById("panelBacktest");
         const buttons = document.querySelectorAll(".view-toggle");
 
         buttons.forEach((button) => {
@@ -1120,6 +1234,7 @@
 
         trendPanel.classList.toggle("active", view === "trend");
         forecastPanel.classList.toggle("active", view === "forecast");
+        backtestPanel.classList.toggle("active", view === "backtest");
         emptyState.style.display = view ? "none" : "block";
 
         if (!updateHash) {
@@ -1133,7 +1248,7 @@
 
       function syncViewFromHash() {
         const view = window.location.hash.replace("#", "");
-        if (view === "trend" || view === "forecast") {
+        if (view === "trend" || view === "forecast" || view === "backtest") {
           setActiveView(view, false);
           return;
         }
@@ -1161,6 +1276,7 @@
             apiRequest("/reads/multi"),
             apiRequest("/signals/performance?limit=60"),
           ]);
+          const backtest = await apiRequest(`/backtest/report?lookback=${lookback}&forecast_horizon=${forecast_horizon}&sample_size=12`).catch(() => null);
 
           renderSummary(summary, recent, latest);
           renderPrediction(prediction);
@@ -1168,6 +1284,7 @@
           renderMultiReads(multiReads);
           renderPerformance(performance);
           renderSignalHistory(signals);
+          renderBacktest(backtest);
           setStatus(true, "Live");
         } catch (err) {
           setStatus(false, "API Unreachable");

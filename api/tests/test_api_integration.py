@@ -81,6 +81,10 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         self.assertIn(prediction.json()["setup_quality"], {"A", "B", "C"})
         self.assertIn(prediction.json()["risk_level"], {"low", "medium", "high"})
         self.assertIn("probability_up", prediction.json())
+        self.assertIn("entry_plan", prediction.json())
+        self.assertIn("invalidation_plan", prediction.json())
+        self.assertIn("target_plan", prediction.json())
+        self.assertIn("risk_reward_ratio", prediction.json())
 
     def test_signal_history_tracks_and_resolves_predictions(self):
         self._seed_series()
@@ -95,6 +99,10 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         pending_history = self.client.get("/signals/recent?limit=5", headers={"X-API-Key": "read-integration-key"})
         self.assertEqual(pending_history.status_code, 200)
         self.assertEqual(pending_history.json()[0]["outcome_status"], "pending")
+        self.assertIn("entry_plan", pending_history.json()[0])
+        self.assertIn("invalidation_plan", pending_history.json()[0])
+        self.assertIn("target_plan", pending_history.json()[0])
+        self.assertIn("risk_reward_ratio", pending_history.json()[0])
 
         for idx in range(18, 22):
             close_price = 62000 + (idx * 350)
@@ -130,6 +138,10 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         self.assertEqual(len(payload["reads"]), 3)
         self.assertEqual([item["label"] for item in payload["reads"]], ["Fast", "Core", "Bigger Picture"])
         self.assertIn(payload["reads"][0]["bias"], {"long", "short", "neutral"})
+        self.assertIn("entry_plan", payload["reads"][0])
+        self.assertIn("invalidation_plan", payload["reads"][0])
+        self.assertIn("target_plan", payload["reads"][0])
+        self.assertIn("risk_reward_ratio", payload["reads"][0])
 
     def test_ingest_upserts_same_source_and_timestamp(self):
         timestamp = "2026-03-01T00:00:00Z"

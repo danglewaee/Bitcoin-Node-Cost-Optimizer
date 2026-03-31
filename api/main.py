@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from database import Base, DATABASE_URL, engine, get_db
@@ -234,7 +235,43 @@ def build_action_read(label: str, candles: list[PriceCandle], lookback: int, for
         summary=prediction.summary,
         guidance=prediction.guidance,
         what_to_watch=prediction.what_to_watch,
+        entry_plan=prediction.entry_plan,
+        entry_level=prediction.entry_level,
+        invalidation_plan=prediction.invalidation_plan,
+        invalidation_level=prediction.invalidation_level,
+        target_plan=prediction.target_plan,
+        target_level=prediction.target_level,
+        risk_reward_ratio=prediction.risk_reward_ratio,
     )
+
+
+def ensure_prediction_signal_columns() -> None:
+    inspector = inspect(engine)
+    if "prediction_signals" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("prediction_signals")}
+    column_definitions = {
+        "entry_plan": "VARCHAR(255)",
+        "entry_level": "FLOAT",
+        "invalidation_plan": "VARCHAR(255)",
+        "invalidation_level": "FLOAT",
+        "target_plan": "VARCHAR(255)",
+        "target_level": "FLOAT",
+        "risk_reward_ratio": "FLOAT",
+    }
+
+    missing_columns = [
+        (name, definition)
+        for name, definition in column_definitions.items()
+        if name not in existing_columns
+    ]
+    if not missing_columns:
+        return
+
+    with engine.begin() as connection:
+        for column_name, definition in missing_columns:
+            connection.execute(text(f"ALTER TABLE prediction_signals ADD COLUMN {column_name} {definition}"))
 
 
 def persist_prediction_signal(
@@ -277,6 +314,13 @@ def persist_prediction_signal(
             summary=prediction.summary,
             guidance=prediction.guidance,
             what_to_watch=prediction.what_to_watch,
+            entry_plan=prediction.entry_plan,
+            entry_level=prediction.entry_level,
+            invalidation_plan=prediction.invalidation_plan,
+            invalidation_level=prediction.invalidation_level,
+            target_plan=prediction.target_plan,
+            target_level=prediction.target_level,
+            risk_reward_ratio=prediction.risk_reward_ratio,
         )
         db.add(signal)
     else:
@@ -292,6 +336,13 @@ def persist_prediction_signal(
         signal.summary = prediction.summary
         signal.guidance = prediction.guidance
         signal.what_to_watch = prediction.what_to_watch
+        signal.entry_plan = prediction.entry_plan
+        signal.entry_level = prediction.entry_level
+        signal.invalidation_plan = prediction.invalidation_plan
+        signal.invalidation_level = prediction.invalidation_level
+        signal.target_plan = prediction.target_plan
+        signal.target_level = prediction.target_level
+        signal.risk_reward_ratio = prediction.risk_reward_ratio
 
     db.commit()
     resolve_prediction_outcomes(db)
@@ -310,6 +361,7 @@ app.add_middleware(
 )
 
 Base.metadata.create_all(bind=engine)
+ensure_prediction_signal_columns()
 
 
 @app.get("/health")

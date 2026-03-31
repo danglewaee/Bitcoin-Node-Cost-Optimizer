@@ -40,6 +40,29 @@ class TrendEngineTests(unittest.TestCase):
         self.assertIn(prediction.risk_level, {"low", "medium", "high"})
         self.assertTrue(prediction.guidance)
         self.assertTrue(prediction.what_to_watch)
+        self.assertTrue(prediction.entry_plan)
+        self.assertTrue(prediction.invalidation_plan)
+        self.assertTrue(prediction.target_plan)
+        self.assertIsNotNone(prediction.entry_level)
+        self.assertIsNotNone(prediction.invalidation_level)
+        self.assertIsNotNone(prediction.target_level)
+        self.assertGreater(prediction.invalidation_level, prediction.entry_level)
+        self.assertLess(prediction.target_level, prediction.entry_level)
+        self.assertIsNotNone(prediction.risk_reward_ratio)
+        self.assertGreater(prediction.risk_reward_ratio, 0)
+
+    def test_build_prediction_includes_trade_levels_for_bullish_bias(self):
+        candles = [build_candle(idx, 60000 + (idx * 500), volume_btc=1200) for idx in range(24)]
+        prediction = build_prediction(candles, lookback=24, forecast_horizon=6)
+
+        self.assertEqual(prediction.direction, "up")
+        self.assertIsNotNone(prediction.entry_level)
+        self.assertIsNotNone(prediction.invalidation_level)
+        self.assertIsNotNone(prediction.target_level)
+        self.assertGreater(prediction.entry_level, prediction.invalidation_level)
+        self.assertGreater(prediction.target_level, prediction.entry_level)
+        self.assertIsNotNone(prediction.risk_reward_ratio)
+        self.assertGreater(prediction.risk_reward_ratio, 0)
 
     def test_build_prediction_rejects_insufficient_history(self):
         candles = [build_candle(idx, 60000 + idx) for idx in range(6)]

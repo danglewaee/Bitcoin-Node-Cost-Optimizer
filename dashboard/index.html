@@ -347,7 +347,7 @@
       .bar-down > span { background: linear-gradient(90deg, #ff7b7b, #ffb0b0); }
       .confidence {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 10px;
       }
       .mini {
@@ -374,6 +374,34 @@
         font-size: 0.94rem;
         line-height: 1.6;
         font-weight: 500;
+      }
+      .trade-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .trade-plan {
+        padding: 12px;
+        border-radius: 16px;
+        border: 1px solid var(--line-soft);
+        background: rgba(255, 255, 255, 0.03);
+        display: grid;
+        gap: 8px;
+      }
+      .trade-plan .label {
+        color: var(--muted);
+        font-size: 0.76rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+      .trade-plan .value {
+        font-size: 1.04rem;
+        font-weight: 700;
+      }
+      .trade-plan .copy {
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.45;
       }
       .factors {
         margin: 0;
@@ -538,6 +566,7 @@
         .read-grid,
         .performance-grid,
         .split-grid,
+        .trade-grid,
         .stats {
           grid-template-columns: 1fr;
         }
@@ -681,9 +710,31 @@
                 <div class="label">Risk Level</div>
                 <div class="value" id="forecastBias">-</div>
               </div>
+              <div class="mini">
+                <div class="label">Reward / Risk</div>
+                <div class="value" id="rewardRisk">-</div>
+              </div>
               <div class="mini callout">
                 <div class="label">What To Watch</div>
                 <div class="value" id="whatToWatch">-</div>
+              </div>
+            </div>
+
+            <div class="trade-grid">
+              <div class="trade-plan">
+                <div class="label">Entry</div>
+                <div class="value" id="entryLevel">-</div>
+                <div class="copy" id="entryPlan">Waiting for a clean entry read.</div>
+              </div>
+              <div class="trade-plan">
+                <div class="label">Invalidation</div>
+                <div class="value" id="invalidationLevel">-</div>
+                <div class="copy" id="invalidationPlan">Waiting for a clean invalidation level.</div>
+              </div>
+              <div class="trade-plan">
+                <div class="label">Target</div>
+                <div class="value" id="targetLevel">-</div>
+                <div class="copy" id="targetPlan">Waiting for a clean target level.</div>
               </div>
             </div>
 
@@ -740,6 +791,14 @@
 
       function fmtPct(value) {
         return `${Number(value).toFixed(2)}%`;
+      }
+
+      function fmtTradeLevel(value, fallback = "WAIT") {
+        return value === null || value === undefined ? fallback : fmtMoney(value);
+      }
+
+      function fmtRiskReward(value) {
+        return value === null || value === undefined ? "WAIT" : `${Number(value).toFixed(2)}R`;
       }
 
       function saveApiKey() {
@@ -911,9 +970,16 @@
         document.getElementById("probDownBar").style.width = `${prediction.probability_down}%`;
         document.getElementById("predConfidence").textContent = prediction.setup_quality;
         document.getElementById("forecastBias").textContent = prediction.risk_level.toUpperCase();
+        document.getElementById("rewardRisk").textContent = fmtRiskReward(prediction.risk_reward_ratio);
         document.getElementById("decisionGuidance").textContent = prediction.guidance || prediction.summary;
         document.getElementById("decisionSummary").textContent = prediction.summary;
         document.getElementById("whatToWatch").textContent = prediction.what_to_watch || "Wait for a cleaner price move before taking fresh risk.";
+        document.getElementById("entryLevel").textContent = fmtTradeLevel(prediction.entry_level);
+        document.getElementById("invalidationLevel").textContent = fmtTradeLevel(prediction.invalidation_level);
+        document.getElementById("targetLevel").textContent = fmtTradeLevel(prediction.target_level);
+        document.getElementById("entryPlan").textContent = prediction.entry_plan || "Waiting for a clean entry read.";
+        document.getElementById("invalidationPlan").textContent = prediction.invalidation_plan || "Waiting for a clean invalidation level.";
+        document.getElementById("targetPlan").textContent = prediction.target_plan || "Waiting for a clean target level.";
         const factorList = document.getElementById("factorList");
         factorList.innerHTML = "";
         (prediction.factors || []).slice(0, 4).forEach((factor) => {
@@ -950,9 +1016,16 @@
           meta.className = "meta";
           meta.textContent = `${read.setup_quality} setup - ${read.risk_level} risk - ${read.lookback}/${read.forecast_horizon}`;
 
+          const tradeMeta = document.createElement("div");
+          tradeMeta.className = "meta";
+          tradeMeta.textContent = read.entry_level !== null && read.entry_level !== undefined
+            ? `Entry ${fmtMoney(read.entry_level)} -> Target ${fmtTradeLevel(read.target_level, "-")} - ${fmtRiskReward(read.risk_reward_ratio)}`
+            : read.entry_plan;
+
           card.appendChild(eyebrow);
           card.appendChild(title);
           card.appendChild(meta);
+          card.appendChild(tradeMeta);
           root.appendChild(card);
         });
       }
@@ -1008,7 +1081,7 @@
           const copy = document.createElement("div");
           copy.className = "history-copy";
           copy.textContent = signal.outcome_status === "pending"
-            ? signal.what_to_watch
+            ? (signal.entry_plan || signal.what_to_watch)
             : `${signal.summary} Realized move: ${fmtPct(signal.realized_change_pct || 0)}.`;
 
           main.appendChild(title);
@@ -1016,7 +1089,10 @@
 
           const meta = document.createElement("div");
           meta.className = "history-meta";
-          meta.innerHTML = `${new Date(signal.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}<br>${signal.risk_level.toUpperCase()} risk`;
+          const levelLine = signal.entry_level !== null && signal.entry_level !== undefined
+            ? `${fmtMoney(signal.entry_level)} -> ${fmtTradeLevel(signal.target_level, "-")} - ${fmtRiskReward(signal.risk_reward_ratio)}`
+            : "";
+          meta.innerHTML = `${new Date(signal.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}<br>${signal.risk_level.toUpperCase()} risk${levelLine ? `<br>${levelLine}` : ""}`;
 
           row.appendChild(status);
           row.appendChild(main);

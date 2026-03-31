@@ -220,6 +220,80 @@ def _direction_to_bias(direction: str) -> str:
     return "neutral"
 
 
+def _build_risk_reward_ratio(
+    direction: str,
+    entry_level: float | None,
+    invalidation_level: float | None,
+    target_level: float | None,
+) -> float | None:
+    if entry_level is None or invalidation_level is None or target_level is None:
+        return None
+
+    if direction == "up":
+        risk = entry_level - invalidation_level
+        reward = target_level - entry_level
+    elif direction == "down":
+        risk = invalidation_level - entry_level
+        reward = entry_level - target_level
+    else:
+        return None
+
+    if risk <= 0 or reward <= 0:
+        return None
+    return round(reward / risk, 2)
+
+
+def _build_trade_plan(direction: str, risk_level: str, features: dict[str, float]) -> dict[str, float | str | None]:
+    latest_close = float(features["latest_close_price"])
+    short_sma = float(features["short_sma"])
+    support_level = float(features["support_level"])
+    resistance_level = float(features["resistance_level"])
+    volatility_pct = max(0.5, float(features["volatility_pct"]) * 0.6)
+    buffer_multiplier = 1.15 if risk_level == "high" else 1.0
+    stop_buffer_pct = volatility_pct * buffer_multiplier
+
+    if direction == "up":
+        entry_level = support_level if risk_level == "high" else max(support_level, min(latest_close, short_sma))
+        invalidation_level = min(support_level, entry_level) * (1.0 - (stop_buffer_pct / 100.0))
+        stop_distance = max(entry_level - invalidation_level, latest_close * 0.005)
+        target_level = resistance_level if resistance_level > latest_close else entry_level + (stop_distance * 1.8)
+        return {
+            "entry_plan": f"Prefer long entries on a pullback near ${entry_level:,.2f} instead of chasing straight strength.",
+            "entry_level": round(entry_level, 2),
+            "invalidation_plan": f"If BTC loses ${invalidation_level:,.2f}, the long read is no longer clean.",
+            "invalidation_level": round(invalidation_level, 2),
+            "target_plan": f"First upside target sits near ${target_level:,.2f} if buyers keep control.",
+            "target_level": round(target_level, 2),
+        }
+
+    if direction == "down":
+        entry_level = resistance_level if risk_level == "high" else min(resistance_level, max(latest_close, short_sma))
+        invalidation_level = max(resistance_level, entry_level) * (1.0 + (stop_buffer_pct / 100.0))
+        stop_distance = max(invalidation_level - entry_level, latest_close * 0.005)
+        target_level = support_level if support_level < latest_close else entry_level - (stop_distance * 1.8)
+        return {
+            "entry_plan": f"Prefer short entries on a weak bounce toward ${entry_level:,.2f} instead of selling the flush.",
+            "entry_level": round(entry_level, 2),
+            "invalidation_plan": f"If BTC reclaims ${invalidation_level:,.2f}, the short read weakens fast.",
+            "invalidation_level": round(invalidation_level, 2),
+            "target_plan": f"First downside target sits near ${target_level:,.2f} if sellers stay in control.",
+            "target_level": round(target_level, 2),
+        }
+
+    return {
+        "entry_plan": (
+            f"Wait for BTC to break above ${resistance_level:,.2f} or below ${support_level:,.2f} before taking fresh directional risk."
+        ),
+        "entry_level": None,
+        "invalidation_plan": (
+            f"If price snaps back inside the ${support_level:,.2f} to ${resistance_level:,.2f} range, step back and wait again."
+        ),
+        "invalidation_level": None,
+        "target_plan": "No clean target yet while BTC is still range-bound.",
+        "target_level": None,
+    }
+
+
 def build_trend_summary(candles: list[PriceCandle], lookback: int | None = None) -> TrendSummaryOut:
     if len(candles) < 12:
         raise ValueError("At least 12 candles are required to analyze a trend.")
@@ -268,6 +342,13 @@ def build_prediction(candles: list[PriceCandle], lookback: int, forecast_horizon
     risk_level = _build_risk_level(direction, confidence_score, features["volatility_pct"], features["recent_change_pct"])
     guidance = _build_guidance(direction, setup_quality, risk_level)
     what_to_watch = _build_watch_text(features)
+    trade_plan = _build_trade_plan(direction, risk_level, features)
+    risk_reward_ratio = _build_risk_reward_ratio(
+        direction,
+        trade_plan["entry_level"],
+        trade_plan["invalidation_level"],
+        trade_plan["target_level"],
+    )
     summary_map = {
         "up": "Bias stays long for now.",
         "down": "Bias stays short for now.",
@@ -288,5 +369,12 @@ def build_prediction(candles: list[PriceCandle], lookback: int, forecast_horizon
         summary=summary_map[direction],
         guidance=guidance,
         what_to_watch=what_to_watch,
+        entry_plan=str(trade_plan["entry_plan"]),
+        entry_level=trade_plan["entry_level"],
+        invalidation_plan=str(trade_plan["invalidation_plan"]),
+        invalidation_level=trade_plan["invalidation_level"],
+        target_plan=str(trade_plan["target_plan"]),
+        target_level=trade_plan["target_level"],
+        risk_reward_ratio=risk_reward_ratio,
         factors=_build_factors(features),
     )

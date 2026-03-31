@@ -67,6 +67,13 @@ class PredictionOut(BaseModel):
     summary: str
     guidance: str
     what_to_watch: str
+    entry_plan: str
+    entry_level: float | None = None
+    invalidation_plan: str
+    invalidation_level: float | None = None
+    target_plan: str
+    target_level: float | None = None
+    risk_reward_ratio: float | None = None
     factors: list[str]
 
 
@@ -89,6 +96,13 @@ class SignalHistoryOut(BaseModel):
     summary: str
     guidance: str
     what_to_watch: str
+    entry_plan: str | None = None
+    entry_level: float | None = None
+    invalidation_plan: str | None = None
+    invalidation_level: float | None = None
+    target_plan: str | None = None
+    target_level: float | None = None
+    risk_reward_ratio: float | None = None
     outcome_status: Literal["pending", "right", "wrong", "flat"]
     resolved_direction: Literal["up", "down", "sideways"] | None = None
     resolved_price: float | None = None
@@ -126,6 +140,13 @@ class ActionReadOut(BaseModel):
     summary: str
     guidance: str
     what_to_watch: str
+    entry_plan: str
+    entry_level: float | None = None
+    invalidation_plan: str
+    invalidation_level: float | None = None
+    target_plan: str
+    target_level: float | None = None
+    risk_reward_ratio: float | None = None
 
 
 class MultiReadOut(BaseModel):

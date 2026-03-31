@@ -98,6 +98,8 @@ Notes for market mode:
 `/signals/stats` returns a lightweight recent-edge summary, including hit rate, resolved reads, open reads, and a short user-facing summary of how the latest sample is performing.
 `/signals/performance` returns recent resolved performance split by bias and setup quality so the action card can show which reads have been working better lately.
 `/reads/multi` returns three user-facing action reads: `Fast`, `Core`, and `Bigger Picture`.
+`/predict` and `/reads/multi` also return trader-facing action fields for `entry`, `invalidation`, `target`, and `risk_reward_ratio`.
+`/signals/recent` now stores those same trade-plan fields so the scorecard can keep the original setup context instead of only the directional bias.
 
 Example prediction request:
 ```bash

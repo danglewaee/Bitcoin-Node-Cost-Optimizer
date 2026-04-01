@@ -26,7 +26,7 @@ def configure_preview_collector(preview_mode: str) -> Path:
 
     if preview_mode == "market":
         os.environ["INTERVAL_SECONDS"] = os.getenv("PREVIEW_POLL_SECONDS", "30")
-        os.environ["BOOTSTRAP_CANDLES"] = os.getenv("PREVIEW_BOOTSTRAP_CANDLES", "96")
+        os.environ["BOOTSTRAP_CANDLES"] = os.getenv("PREVIEW_BOOTSTRAP_CANDLES", "192")
         os.environ["CANDLE_INTERVAL_MINUTES"] = os.getenv("PREVIEW_CANDLE_INTERVAL_MINUTES", "15")
         os.environ["MARKET_API_BASE_URL"] = os.getenv("PREVIEW_MARKET_API_BASE_URL", "https://api.exchange.coinbase.com")
         os.environ["MARKET_PRODUCT_ID"] = os.getenv("PREVIEW_MARKET_PRODUCT_ID", "BTC-USD")

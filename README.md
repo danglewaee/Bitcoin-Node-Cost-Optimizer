@@ -92,7 +92,8 @@ Notes for market mode:
 - `GET /signals/stats?limit=20` with `READ_API_KEY`
 - `GET /signals/performance?limit=60` with `READ_API_KEY`
 - `GET /reads/multi` with `READ_API_KEY`
-- `GET /backtest/report?lookback=48&forecast_horizon=6&sample_size=12` with `READ_API_KEY`
+- `GET /backtest/report?lookback=48&forecast_horizon=6&sample_size=24` with `READ_API_KEY`
+- `GET /backtest/export.csv?lookback=48&forecast_horizon=6&sample_size=24` with `READ_API_KEY`
 - `GET /health`
 
 `/signals/recent` returns the recent prediction scorecard, including whether each saved signal is still open or later resolved as right, wrong, or flat.
@@ -102,6 +103,7 @@ Notes for market mode:
 `/predict` and `/reads/multi` also return trader-facing action fields for `entry`, `invalidation`, `target`, and `risk_reward_ratio`.
 `/signals/recent` now stores those same trade-plan fields so the scorecard can keep the original setup context instead of only the directional bias.
 `/backtest/report` runs a recent walk-forward evaluation on historical candles and returns hit rate, edge, drawdown, confidence, and recent backtest runs so the UI can show whether the engine is earning trust.
+Most read endpoints accept an optional `source` query param so the dashboard can stay scoped to one feed instead of mixing `mock` with live market data.
 
 Example prediction request:
 ```bash
@@ -128,7 +130,7 @@ python benchmarks/run_offline_benchmarks.py
 - Optional preview env overrides:
   - `PREVIEW_MARKET_PRODUCT_ID` (default `BTC-USD`)
   - `PREVIEW_CANDLE_INTERVAL_MINUTES` (default `15`)
-  - `PREVIEW_BOOTSTRAP_CANDLES` (default `96`)
+  - `PREVIEW_BOOTSTRAP_CANDLES` (default `192`)
   - `PREVIEW_POLL_SECONDS` (default `30`)
 
 ## Test

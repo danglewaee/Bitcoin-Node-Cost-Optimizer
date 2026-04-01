@@ -1,8 +1,10 @@
+import csv
 import os
 import secrets
 from datetime import datetime, timezone
+from io import StringIO
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
@@ -85,21 +87,43 @@ def require_write_api_key(x_api_key: str | None = Header(default=None, alias="X-
     _check_api_key(WRITE_API_KEY, x_api_key)
 
 
-def get_recent_candles(db: Session, limit: int) -> list[PriceCandle]:
-    rows = db.query(PriceCandle).order_by(PriceCandle.timestamp.desc()).limit(limit).all()
+def normalize_requested_source(source: str | None) -> str | None:
+    if source is None:
+        return None
+
+    cleaned = source.strip()
+    if not cleaned:
+        return None
+    if cleaned == "mock" or cleaned.startswith("mock-"):
+        return "mock"
+    return cleaned
+
+
+def get_recent_candles(db: Session, limit: int, source: str | None = None) -> list[PriceCandle]:
+    query = apply_price_source_filter(db.query(PriceCandle), source)
+    rows = query.order_by(PriceCandle.timestamp.desc()).limit(limit).all()
     return list(reversed(rows))
 
 
 def normalize_signal_source(source: str) -> str:
-    if source.startswith("mock-"):
-        return "mock"
-    return source
+    normalized = normalize_requested_source(source)
+    return normalized or source
 
 
-def apply_signal_source_filter(query, signal_source: str):
-    if signal_source == "mock":
+def apply_price_source_filter(query, source: str | None):
+    normalized_source = normalize_requested_source(source)
+    if normalized_source is None:
+        return query
+    if normalized_source == "mock":
         return query.filter(PriceCandle.source.like("mock-%"))
-    return query.filter(PriceCandle.source == signal_source)
+    return query.filter(PriceCandle.source == normalized_source)
+
+
+def apply_prediction_source_filter(query, source: str | None):
+    normalized_source = normalize_requested_source(source)
+    if normalized_source is None:
+        return query
+    return query.filter(PredictionSignal.source == normalized_source)
 
 
 def resolve_prediction_outcomes(db: Session) -> None:
@@ -113,7 +137,7 @@ def resolve_prediction_outcomes(db: Session) -> None:
     updated = False
     for signal in pending_signals:
         outcome_query = db.query(PriceCandle).filter(PriceCandle.timestamp >= signal.target_timestamp)
-        outcome_candle = apply_signal_source_filter(outcome_query, signal.source).order_by(PriceCandle.timestamp.asc()).first()
+        outcome_candle = apply_price_source_filter(outcome_query, signal.source).order_by(PriceCandle.timestamp.asc()).first()
 
         if outcome_candle is None:
             continue
@@ -389,6 +413,92 @@ def build_action_read(label: str, candles: list[PriceCandle], lookback: int, for
     )
 
 
+def build_backtest_csv(report: BacktestReportOut, source: str | None) -> str:
+    csv_buffer = StringIO()
+    writer = csv.writer(csv_buffer)
+    writer.writerow(
+        [
+            "source",
+            "lookback",
+            "forecast_horizon",
+            "report_sample_size",
+            "report_hit_rate",
+            "report_cumulative_strategy_return_pct",
+            "report_max_drawdown_pct",
+            "report_avg_risk_reward_ratio",
+            "reference_timestamp",
+            "target_timestamp",
+            "bias",
+            "direction",
+            "setup_quality",
+            "risk_level",
+            "confidence_score",
+            "entry_level",
+            "invalidation_level",
+            "target_level",
+            "risk_reward_ratio",
+            "realized_direction",
+            "realized_change_pct",
+            "strategy_return_pct",
+            "outcome_status",
+        ]
+    )
+
+    export_source = normalize_requested_source(source) or "all"
+    for run in report.runs:
+        writer.writerow(
+            [
+                export_source,
+                report.lookback,
+                report.forecast_horizon,
+                report.sample_size,
+                report.hit_rate,
+                report.cumulative_strategy_return_pct,
+                report.max_drawdown_pct,
+                report.avg_risk_reward_ratio,
+                run.reference_timestamp.isoformat(),
+                run.target_timestamp.isoformat(),
+                run.bias,
+                run.direction,
+                run.setup_quality,
+                run.risk_level,
+                run.confidence_score,
+                run.entry_level,
+                run.invalidation_level,
+                run.target_level,
+                run.risk_reward_ratio,
+                run.realized_direction,
+                run.realized_change_pct,
+                run.strategy_return_pct,
+                run.outcome_status,
+            ]
+        )
+
+    return csv_buffer.getvalue()
+
+
+def build_backtest_response(
+    db: Session,
+    lookback: int,
+    forecast_horizon: int,
+    sample_size: int,
+    source: str | None,
+) -> BacktestReportOut:
+    required_candles = lookback + forecast_horizon + sample_size
+    candles = get_recent_candles(db, required_candles, source=source)
+    if not candles:
+        raise HTTPException(status_code=404, detail="No price candles available")
+    try:
+        return build_backtest_report(
+            candles=candles,
+            lookback=lookback,
+            forecast_horizon=forecast_horizon,
+            sample_size=sample_size,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 def ensure_prediction_signal_columns() -> None:
     inspector = inspect(engine)
     if "prediction_signals" not in inspector.get_table_names():
@@ -559,10 +669,11 @@ def reset_price_candles(
 
 @app.get("/prices/latest", response_model=CandleOut)
 def latest_price_candle(
+    source: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
-    candle = db.query(PriceCandle).order_by(PriceCandle.timestamp.desc()).first()
+    candle = apply_price_source_filter(db.query(PriceCandle), source).order_by(PriceCandle.timestamp.desc()).first()
     if not candle:
         raise HTTPException(status_code=404, detail="No price candles available")
     return candle
@@ -571,10 +682,11 @@ def latest_price_candle(
 @app.get("/prices/recent", response_model=list[CandleOut])
 def recent_price_candles(
     limit: int = Query(default=72, ge=12, le=500),
+    source: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
-    rows = get_recent_candles(db, limit)
+    rows = get_recent_candles(db, limit, source=source)
     if not rows:
         raise HTTPException(status_code=404, detail="No price candles available")
     return rows
@@ -583,11 +695,17 @@ def recent_price_candles(
 @app.get("/signals/recent", response_model=list[SignalHistoryOut])
 def recent_signals(
     limit: int = Query(default=8, ge=1, le=50),
+    source: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
     resolve_prediction_outcomes(db)
-    rows = db.query(PredictionSignal).order_by(PredictionSignal.generated_at.desc()).limit(limit).all()
+    rows = (
+        apply_prediction_source_filter(db.query(PredictionSignal), source)
+        .order_by(PredictionSignal.generated_at.desc())
+        .limit(limit)
+        .all()
+    )
     if not rows:
         raise HTTPException(status_code=404, detail="No prediction signals available")
     return rows
@@ -596,22 +714,34 @@ def recent_signals(
 @app.get("/signals/stats", response_model=SignalStatsOut)
 def signal_stats(
     limit: int = Query(default=20, ge=1, le=200),
+    source: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
     resolve_prediction_outcomes(db)
-    rows = db.query(PredictionSignal).order_by(PredictionSignal.generated_at.desc()).limit(limit).all()
+    rows = (
+        apply_prediction_source_filter(db.query(PredictionSignal), source)
+        .order_by(PredictionSignal.generated_at.desc())
+        .limit(limit)
+        .all()
+    )
     return build_signal_stats(rows)
 
 
 @app.get("/signals/performance", response_model=SignalPerformanceOut)
 def signal_performance(
     limit: int = Query(default=60, ge=1, le=500),
+    source: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
     resolve_prediction_outcomes(db)
-    rows = db.query(PredictionSignal).order_by(PredictionSignal.generated_at.desc()).limit(limit).all()
+    rows = (
+        apply_prediction_source_filter(db.query(PredictionSignal), source)
+        .order_by(PredictionSignal.generated_at.desc())
+        .limit(limit)
+        .all()
+    )
     return build_signal_performance(rows)
 
 
@@ -619,10 +749,11 @@ def signal_performance(
 @app.get("/summary", response_model=TrendSummaryOut)
 def trend_summary(
     lookback: int = Query(default=48, ge=12, le=500),
+    source: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
-    candles = get_recent_candles(db, lookback)
+    candles = get_recent_candles(db, lookback, source=source)
     if not candles:
         raise HTTPException(status_code=404, detail="No price candles available")
     try:
@@ -634,10 +765,11 @@ def trend_summary(
 @app.post("/predict", response_model=PredictionOut)
 def predict_direction(
     payload: PredictionRequest,
+    source: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
-    candles = get_recent_candles(db, payload.lookback)
+    candles = get_recent_candles(db, payload.lookback, source=source)
     if not candles:
         raise HTTPException(status_code=404, detail="No price candles available")
     try:
@@ -654,10 +786,11 @@ def predict_direction(
 
 @app.get("/reads/multi", response_model=MultiReadOut)
 def multi_reads(
+    source: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
-    candles = get_recent_candles(db, 72)
+    candles = get_recent_candles(db, 72, source=source)
     if not candles:
         raise HTTPException(status_code=404, detail="No price candles available")
     if len(candles) < 12:
@@ -676,19 +809,42 @@ def backtest_report(
     lookback: int = Query(default=48, ge=12, le=500),
     forecast_horizon: int = Query(default=6, ge=1, le=72),
     sample_size: int = Query(default=36, ge=5, le=240),
+    source: str | None = Query(default=None),
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
-    required_candles = lookback + forecast_horizon + sample_size
-    candles = get_recent_candles(db, required_candles)
-    if not candles:
-        raise HTTPException(status_code=404, detail="No price candles available")
-    try:
-        return build_backtest_report(
-            candles=candles,
-            lookback=lookback,
-            forecast_horizon=forecast_horizon,
-            sample_size=sample_size,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return build_backtest_response(
+        db=db,
+        lookback=lookback,
+        forecast_horizon=forecast_horizon,
+        sample_size=sample_size,
+        source=source,
+    )
+
+
+@app.get("/backtest/export.csv")
+def backtest_export_csv(
+    lookback: int = Query(default=48, ge=12, le=500),
+    forecast_horizon: int = Query(default=6, ge=1, le=72),
+    sample_size: int = Query(default=36, ge=5, le=240),
+    source: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    _auth: None = Depends(require_read_api_key),
+):
+    report = build_backtest_response(
+        db=db,
+        lookback=lookback,
+        forecast_horizon=forecast_horizon,
+        sample_size=sample_size,
+        source=source,
+    )
+    normalized_source = normalize_requested_source(source) or "all-sources"
+    filename_source = normalized_source.replace(":", "-")
+    csv_text = build_backtest_csv(report, source)
+    return Response(
+        content=csv_text,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="bitcoin-trend-backtest-{filename_source}.csv"'
+        },
+    )

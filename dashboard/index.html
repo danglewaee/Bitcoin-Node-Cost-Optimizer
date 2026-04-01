@@ -146,7 +146,7 @@
       }
       .toolbar-grid {
         display: grid;
-        grid-template-columns: 1.4fr 0.8fr 0.8fr;
+        grid-template-columns: 1.2fr 1.4fr 0.8fr 0.8fr;
         gap: 10px;
       }
       .toolbar-label {
@@ -621,6 +621,10 @@
                 <input id="apiKeyInput" class="input" type="password" placeholder="dev-read-key" />
               </div>
               <div>
+                <label class="toolbar-label" for="sourceInput">Data source</label>
+                <input id="sourceInput" class="input" type="text" placeholder="coinbase-exchange:BTC-USD" />
+              </div>
+              <div>
                 <label class="toolbar-label" for="lookback">Lookback</label>
                 <input id="lookback" class="input" type="number" min="12" max="500" value="48" />
               </div>
@@ -797,7 +801,10 @@
               <h2>Backtest</h2>
               <p class="card-note" id="backtestSummary">Waiting for a recent walk-forward report.</p>
             </div>
-            <div class="badge" id="backtestBadge">Walk-forward</div>
+            <div style="display: grid; gap: 10px; justify-items: end;">
+              <div class="badge" id="backtestBadge">Walk-forward</div>
+              <button class="button secondary" type="button" onclick="exportBacktest()">Export CSV</button>
+            </div>
           </div>
 
           <div class="backtest-grid">
@@ -821,10 +828,13 @@
 
     <script>
       const FALLBACK_BASE = "http://127.0.0.1:8765";
+      const BACKTEST_SAMPLE_SIZE = 24;
       const qs = new URLSearchParams(window.location.search);
       const urlApiKey = qs.get("read_api_key") || "";
+      const urlSource = qs.get("source") || "";
       let apiBase = "";
       let apiKey = urlApiKey || localStorage.getItem("btc_trend_api_key") || "";
+      let dataSource = urlSource || localStorage.getItem("btc_trend_source") || "coinbase-exchange:BTC-USD";
 
       function fmtMoney(value) {
         return `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`;
@@ -847,9 +857,15 @@
         return value === null || value === undefined ? "WAIT" : `${Number(value).toFixed(2)}R`;
       }
 
+      function readSourceInput() {
+        return (document.getElementById("sourceInput").value || "").trim();
+      }
+
       function saveApiKey() {
         apiKey = (document.getElementById("apiKeyInput").value || "").trim();
+        dataSource = readSourceInput();
         localStorage.setItem("btc_trend_api_key", apiKey);
+        localStorage.setItem("btc_trend_source", dataSource);
       }
 
       function authHeaders(extraHeaders = {}) {
@@ -859,10 +875,7 @@
       }
 
       async function apiRequest(path, options = {}) {
-        const tries = [];
-        if (apiBase) tries.push(`${apiBase}${path}`);
-        tries.push(`/api${path}`);
-        tries.push(`${FALLBACK_BASE}${path}`);
+        const tries = apiCandidates(path);
 
         let lastErr = null;
         for (const url of tries) {
@@ -881,6 +894,50 @@
               apiBase = "/api";
             }
             return data;
+          } catch (err) {
+            lastErr = err;
+          }
+        }
+        throw lastErr || new Error("Unable to reach API");
+      }
+
+      function apiCandidates(path) {
+        const tries = [];
+        if (apiBase) tries.push(`${apiBase}${path}`);
+        tries.push(`/api${path}`);
+        tries.push(`${FALLBACK_BASE}${path}`);
+        return tries;
+      }
+
+      function buildPath(path, params = {}) {
+        const url = new URL(path, window.location.origin);
+        Object.entries(params).forEach(([key, value]) => {
+          if (value !== null && value !== undefined && value !== "") {
+            url.searchParams.set(key, String(value));
+          }
+        });
+        return `${url.pathname}${url.search}`;
+      }
+
+      async function apiBlob(path, options = {}) {
+        const tries = apiCandidates(path);
+        let lastErr = null;
+        for (const url of tries) {
+          try {
+            const response = await fetch(url, {
+              cache: "no-store",
+              headers: authHeaders(options.headers || {}),
+              ...options,
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const blob = await response.blob();
+            if (url.startsWith("http")) {
+              const parsed = new URL(url);
+              apiBase = `${parsed.protocol}//${parsed.host}`;
+            } else if (url.startsWith("/api")) {
+              apiBase = "/api";
+            }
+            return { blob, response };
           } catch (err) {
             lastErr = err;
           }
@@ -987,7 +1044,7 @@
 
         document.getElementById("trendStrength").textContent = `${summary.trend_strength_score.toFixed(0)}/100 conviction`;
         document.getElementById("trendNarrative").textContent = summary.market_read || summary.narrative;
-        document.getElementById("latestSource").textContent = summary.what_to_watch || `Source ${latest.source} - ${new Date(latest.timestamp).toLocaleString()}`;
+        document.getElementById("latestSource").textContent = `Source ${latest.source} | ${new Date(latest.timestamp).toLocaleString()}`;
 
         document.getElementById("shortSma").textContent = fmtMoney(summary.short_sma);
         document.getElementById("longSma").textContent = fmtMoney(summary.long_sma);
@@ -1221,6 +1278,38 @@
         }
       }
 
+      async function exportBacktest() {
+        try {
+          saveApiKey();
+          const lookback = Number(document.getElementById("lookback").value || 48);
+          const forecast_horizon = Number(document.getElementById("horizon").value || 6);
+          const path = buildPath("/backtest/export.csv", {
+            lookback,
+            forecast_horizon,
+            sample_size: BACKTEST_SAMPLE_SIZE,
+            source: dataSource,
+          });
+          const { blob, response } = await apiBlob(path, {
+            headers: { Accept: "text/csv" },
+          });
+          const contentDisposition = response.headers.get("content-disposition") || "";
+          const match = contentDisposition.match(/filename=\"?([^"]+)\"?/i);
+          const filename = match ? match[1] : "bitcoin-trend-backtest.csv";
+          const objectUrl = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = objectUrl;
+          link.download = filename;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+          URL.revokeObjectURL(objectUrl);
+          setStatus(true, "CSV Ready");
+        } catch (err) {
+          setStatus(false, "Export Failed");
+          console.error(err);
+        }
+      }
+
       function setActiveView(view, updateHash = true) {
         const emptyState = document.getElementById("viewEmpty");
         const trendPanel = document.getElementById("panelTrend");
@@ -1260,23 +1349,31 @@
           saveApiKey();
           const lookback = Number(document.getElementById("lookback").value || 48);
           const forecast_horizon = Number(document.getElementById("horizon").value || 6);
+          const scopedParams = { source: dataSource };
 
           const [summary, latest, recent, prediction] = await Promise.all([
-            apiRequest(`/trend/summary?lookback=${lookback}`),
-            apiRequest("/prices/latest"),
-            apiRequest(`/prices/recent?limit=${Math.max(lookback, 72)}`),
-            apiRequest("/predict", {
+            apiRequest(buildPath("/trend/summary", { lookback, ...scopedParams })),
+            apiRequest(buildPath("/prices/latest", scopedParams)),
+            apiRequest(buildPath("/prices/recent", { limit: Math.max(lookback, 72), ...scopedParams })),
+            apiRequest(buildPath("/predict", scopedParams), {
               method: "POST",
               body: JSON.stringify({ lookback, forecast_horizon }),
             }),
           ]);
           const [signals, stats, multiReads, performance] = await Promise.all([
-            apiRequest("/signals/recent?limit=5"),
-            apiRequest("/signals/stats?limit=20"),
-            apiRequest("/reads/multi"),
-            apiRequest("/signals/performance?limit=60"),
+            apiRequest(buildPath("/signals/recent", { limit: 5, ...scopedParams })),
+            apiRequest(buildPath("/signals/stats", { limit: 20, ...scopedParams })),
+            apiRequest(buildPath("/reads/multi", scopedParams)),
+            apiRequest(buildPath("/signals/performance", { limit: 60, ...scopedParams })),
           ]);
-          const backtest = await apiRequest(`/backtest/report?lookback=${lookback}&forecast_horizon=${forecast_horizon}&sample_size=12`).catch(() => null);
+          const backtest = await apiRequest(
+            buildPath("/backtest/report", {
+              lookback,
+              forecast_horizon,
+              sample_size: BACKTEST_SAMPLE_SIZE,
+              ...scopedParams,
+            })
+          ).catch(() => null);
 
           renderSummary(summary, recent, latest);
           renderPrediction(prediction);
@@ -1293,6 +1390,7 @@
       }
 
       document.getElementById("apiKeyInput").value = apiKey;
+      document.getElementById("sourceInput").value = dataSource;
       document.querySelectorAll(".view-toggle").forEach((button) => {
         button.addEventListener("click", () => setActiveView(button.dataset.view));
       });

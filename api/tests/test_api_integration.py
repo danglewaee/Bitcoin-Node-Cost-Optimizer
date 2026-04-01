@@ -11,14 +11,14 @@ import main
 from fastapi.testclient import TestClient
 
 
-def sample_candle(close_price: float = 65000.0, timestamp: str | None = None) -> dict:
+def sample_candle(close_price: float = 65000.0, timestamp: str | None = None, source: str = "integration-test") -> dict:
     return {
         "open_price": round(close_price * 0.998, 2),
         "high_price": round(close_price * 1.004, 2),
         "low_price": round(close_price * 0.994, 2),
         "close_price": round(close_price, 2),
         "volume_btc": 1200.0,
-        "source": "integration-test",
+        "source": source,
         "timestamp": timestamp,
     }
 
@@ -33,12 +33,23 @@ class ApiHttpIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.client.delete("/prices/reset", headers={"X-API-Key": "write-integration-key"})
 
-    def _seed_series(self, total: int = 18) -> None:
+    def _seed_series(
+        self,
+        total: int = 18,
+        source: str = "integration-test",
+        base_price: float = 62000,
+        step: float = 350,
+        day: int = 1,
+    ) -> None:
         for idx in range(total):
-            close_price = 62000 + (idx * 350)
+            close_price = base_price + (idx * step)
             response = self.client.post(
                 "/prices",
-                json=sample_candle(close_price=close_price, timestamp=f"2026-03-01T{idx:02d}:00:00Z"),
+                json=sample_candle(
+                    close_price=close_price,
+                    source=source,
+                    timestamp=f"2026-03-{day:02d}T{idx:02d}:00:00Z",
+                ),
                 headers={"X-API-Key": "write-integration-key"},
             )
             self.assertEqual(response.status_code, 200)
@@ -143,6 +154,43 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         self.assertIn("target_plan", payload["reads"][0])
         self.assertIn("risk_reward_ratio", payload["reads"][0])
 
+    def test_source_filter_scopes_reads_and_backtest_to_one_feed(self):
+        self._seed_series(total=24, source="integration-test", base_price=62000, step=350, day=1)
+        self._seed_series(total=18, source="integration-alt", base_price=88000, step=-225, day=2)
+
+        latest_default = self.client.get("/prices/latest", headers={"X-API-Key": "read-integration-key"})
+        self.assertEqual(latest_default.status_code, 200)
+        self.assertEqual(latest_default.json()["source"], "integration-alt")
+
+        latest_filtered = self.client.get(
+            "/prices/latest?source=integration-test",
+            headers={"X-API-Key": "read-integration-key"},
+        )
+        self.assertEqual(latest_filtered.status_code, 200)
+        self.assertEqual(latest_filtered.json()["source"], "integration-test")
+
+        prediction = self.client.post(
+            "/predict?source=integration-alt",
+            json={"lookback": 18, "forecast_horizon": 3},
+            headers={"X-API-Key": "read-integration-key"},
+        )
+        self.assertEqual(prediction.status_code, 200)
+        self.assertEqual(prediction.json()["direction"], "down")
+
+        history = self.client.get(
+            "/signals/recent?limit=5&source=integration-alt",
+            headers={"X-API-Key": "read-integration-key"},
+        )
+        self.assertEqual(history.status_code, 200)
+        self.assertTrue(all(row["source"] == "integration-alt" for row in history.json()))
+
+        backtest = self.client.get(
+            "/backtest/report?lookback=12&forecast_horizon=3&sample_size=10&source=integration-alt",
+            headers={"X-API-Key": "read-integration-key"},
+        )
+        self.assertEqual(backtest.status_code, 200)
+        self.assertEqual(backtest.json()["sample_size"], 4)
+
     def test_backtest_report_returns_walk_forward_metrics(self):
         self._seed_series(total=24)
 
@@ -161,6 +209,24 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         self.assertGreaterEqual(len(payload["runs"]), 1)
         self.assertIn("strategy_return_pct", payload["runs"][0])
         self.assertIn("outcome_status", payload["runs"][0])
+
+    def test_backtest_export_csv_returns_scoped_rows(self):
+        self._seed_series(total=24, source="integration-test", day=1)
+        self._seed_series(total=24, source="integration-alt", base_price=91000, step=-175, day=2)
+
+        response = self.client.get(
+            "/backtest/export.csv?lookback=12&forecast_horizon=3&sample_size=6&source=integration-test",
+            headers={"X-API-Key": "read-integration-key"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/csv", response.headers["content-type"])
+        self.assertIn("attachment; filename=", response.headers["content-disposition"])
+
+        lines = response.text.strip().splitlines()
+        self.assertGreaterEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("source,lookback,forecast_horizon"))
+        self.assertIn("integration-test", response.text)
+        self.assertNotIn("integration-alt,", response.text)
 
     def test_ingest_upserts_same_source_and_timestamp(self):
         timestamp = "2026-03-01T00:00:00Z"

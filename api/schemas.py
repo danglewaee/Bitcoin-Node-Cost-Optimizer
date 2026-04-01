@@ -55,6 +55,8 @@ class PredictionRequest(BaseModel):
 
 class PredictionOut(BaseModel):
     generated_at: datetime
+    model_version: str | None = None
+    run_id: str | None = None
     lookback: int
     forecast_horizon: int
     direction: Literal["up", "down", "sideways"]
@@ -81,6 +83,8 @@ class SignalHistoryOut(BaseModel):
     id: int
     generated_at: datetime
     source: str
+    model_version: str | None = None
+    run_id: str | None = None
     reference_timestamp: datetime
     reference_price: float
     target_timestamp: datetime
@@ -129,6 +133,8 @@ class SignalStatsOut(BaseModel):
 
 class ActionReadOut(BaseModel):
     label: str
+    model_version: str | None = None
+    run_id: str | None = None
     lookback: int
     forecast_horizon: int
     direction: Literal["up", "down", "sideways"]
@@ -171,6 +177,8 @@ class SignalPerformanceOut(BaseModel):
 
 
 class BacktestRunOut(BaseModel):
+    model_version: str | None = None
+    run_id: str | None = None
     reference_timestamp: datetime
     target_timestamp: datetime
     direction: Literal["up", "down", "sideways"]
@@ -189,6 +197,8 @@ class BacktestRunOut(BaseModel):
 
 
 class BacktestReportOut(BaseModel):
+    model_version: str | None = None
+    source: str | None = None
     lookback: int
     forecast_horizon: int
     sample_size: int

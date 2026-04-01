@@ -7,6 +7,8 @@ from statistics import median, pstdev
 from models import PriceCandle
 from schemas import PredictionOut, TrendSummaryOut
 
+TREND_ENGINE_MODEL_VERSION = "heuristic-trend-engine@2026.04.01"
+
 
 def _average(values: list[float]) -> float:
     return sum(values) / len(values) if values else 0.0

@@ -1,5 +1,6 @@
 import os
 import unittest
+from datetime import datetime, timezone
 
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test_trend.db")
@@ -95,6 +96,14 @@ class ApiConfigAndAuthTests(unittest.TestCase):
             main.require_write_api_key("write-test-key")
         finally:
             main.WRITE_API_KEY = old_key
+
+    def test_build_run_id_is_stable_for_same_context(self):
+        reference_timestamp = datetime(2026, 4, 1, 4, 45, tzinfo=timezone.utc)
+        run_id_1 = main.build_run_id("coinbase-exchange:BTC-USD", reference_timestamp, 48, 6)
+        run_id_2 = main.build_run_id("coinbase-exchange:BTC-USD", reference_timestamp, 48, 6)
+
+        self.assertEqual(run_id_1, run_id_2)
+        self.assertTrue(run_id_1.startswith("bttrend-"))
 
     def test_routes_protected_in_p15_scope(self):
         read_routes = {

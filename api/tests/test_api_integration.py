@@ -96,6 +96,8 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         self.assertIn("invalidation_plan", prediction.json())
         self.assertIn("target_plan", prediction.json())
         self.assertIn("risk_reward_ratio", prediction.json())
+        self.assertTrue(prediction.json()["model_version"])
+        self.assertTrue(prediction.json()["run_id"])
 
     def test_signal_history_tracks_and_resolves_predictions(self):
         self._seed_series()
@@ -114,6 +116,8 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         self.assertIn("invalidation_plan", pending_history.json()[0])
         self.assertIn("target_plan", pending_history.json()[0])
         self.assertIn("risk_reward_ratio", pending_history.json()[0])
+        self.assertTrue(pending_history.json()[0]["model_version"])
+        self.assertTrue(pending_history.json()[0]["run_id"])
 
         for idx in range(18, 22):
             close_price = 62000 + (idx * 350)
@@ -153,6 +157,8 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         self.assertIn("invalidation_plan", payload["reads"][0])
         self.assertIn("target_plan", payload["reads"][0])
         self.assertIn("risk_reward_ratio", payload["reads"][0])
+        self.assertTrue(payload["reads"][0]["model_version"])
+        self.assertTrue(payload["reads"][0]["run_id"])
 
     def test_source_filter_scopes_reads_and_backtest_to_one_feed(self):
         self._seed_series(total=24, source="integration-test", base_price=62000, step=350, day=1)
@@ -205,10 +211,14 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         self.assertIn("hit_rate", payload)
         self.assertIn("cumulative_strategy_return_pct", payload)
         self.assertIn("avg_risk_reward_ratio", payload)
+        self.assertTrue(payload["model_version"])
+        self.assertTrue(payload["source"])
         self.assertTrue(payload["summary"])
         self.assertGreaterEqual(len(payload["runs"]), 1)
         self.assertIn("strategy_return_pct", payload["runs"][0])
         self.assertIn("outcome_status", payload["runs"][0])
+        self.assertTrue(payload["runs"][0]["run_id"])
+        self.assertTrue(payload["runs"][0]["model_version"])
 
     def test_backtest_export_csv_returns_scoped_rows(self):
         self._seed_series(total=24, source="integration-test", day=1)
@@ -224,7 +234,7 @@ class ApiHttpIntegrationTests(unittest.TestCase):
 
         lines = response.text.strip().splitlines()
         self.assertGreaterEqual(len(lines), 2)
-        self.assertTrue(lines[0].startswith("source,lookback,forecast_horizon"))
+        self.assertTrue(lines[0].startswith("source,model_version,lookback,forecast_horizon"))
         self.assertIn("integration-test", response.text)
         self.assertNotIn("integration-alt,", response.text)
 

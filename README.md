@@ -102,6 +102,7 @@ Notes for market mode:
 `/reads/multi` returns three user-facing action reads: `Fast`, `Core`, and `Bigger Picture`.
 `/predict` and `/reads/multi` also return trader-facing action fields for `entry`, `invalidation`, `target`, and `risk_reward_ratio`.
 `/signals/recent` now stores those same trade-plan fields so the scorecard can keep the original setup context instead of only the directional bias.
+`/predict`, `/signals/recent`, and `/backtest/report` also expose `model_version` and `run_id` so each saved read can be tied back to the exact engine revision that produced it.
 `/backtest/report` runs a recent walk-forward evaluation on historical candles and returns hit rate, edge, drawdown, confidence, and recent backtest runs so the UI can show whether the engine is earning trust.
 Most read endpoints accept an optional `source` query param so the dashboard can stay scoped to one feed instead of mixing `mock` with live market data.
 

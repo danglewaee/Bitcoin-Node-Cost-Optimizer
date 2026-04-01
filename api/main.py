@@ -1,4 +1,5 @@
 import csv
+import hashlib
 import os
 import secrets
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ from schemas import (
     TrendSummaryOut,
 )
 from trend_engine import (
+    TREND_ENGINE_MODEL_VERSION,
     build_prediction,
     build_trend_summary,
     classify_realized_direction,
@@ -108,6 +110,26 @@ def get_recent_candles(db: Session, limit: int, source: str | None = None) -> li
 def normalize_signal_source(source: str) -> str:
     normalized = normalize_requested_source(source)
     return normalized or source
+
+
+def ensure_utc_timestamp(timestamp: datetime) -> datetime:
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=timezone.utc)
+    return timestamp.astimezone(timezone.utc)
+
+
+def build_run_id(source: str, reference_timestamp: datetime, lookback: int, forecast_horizon: int) -> str:
+    payload = "|".join(
+        [
+            TREND_ENGINE_MODEL_VERSION,
+            source,
+            ensure_utc_timestamp(reference_timestamp).isoformat(),
+            str(lookback),
+            str(forecast_horizon),
+        ]
+    )
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+    return f"bttrend-{digest}"
 
 
 def apply_price_source_filter(query, source: str | None):
@@ -277,6 +299,7 @@ def build_backtest_report(
     lookback: int,
     forecast_horizon: int,
     sample_size: int,
+    source: str | None = None,
 ) -> BacktestReportOut:
     minimum_candles = lookback + forecast_horizon + 1
     if len(candles) < minimum_candles:
@@ -290,6 +313,7 @@ def build_backtest_report(
 
     active_indexes = eligible_end_indexes[-sample_size:]
     runs: list[BacktestRunOut] = []
+    report_source = normalize_requested_source(source) or normalize_signal_source(candles[-1].source)
 
     for end_index in active_indexes:
         history = candles[end_index - lookback + 1 : end_index + 1]
@@ -313,6 +337,8 @@ def build_backtest_report(
 
         runs.append(
             BacktestRunOut(
+                model_version=TREND_ENGINE_MODEL_VERSION,
+                run_id=build_run_id(report_source, reference_candle.timestamp, lookback, forecast_horizon),
                 reference_timestamp=reference_candle.timestamp,
                 target_timestamp=outcome_candle.timestamp,
                 direction=prediction.direction,
@@ -368,6 +394,8 @@ def build_backtest_report(
         )
 
     return BacktestReportOut(
+        model_version=TREND_ENGINE_MODEL_VERSION,
+        source=report_source,
         lookback=lookback,
         forecast_horizon=forecast_horizon,
         sample_size=sample_count,
@@ -390,8 +418,12 @@ def build_backtest_report(
 def build_action_read(label: str, candles: list[PriceCandle], lookback: int, forecast_horizon: int) -> ActionReadOut:
     actual_lookback = min(max(12, lookback), len(candles))
     prediction = build_prediction(candles=candles, lookback=actual_lookback, forecast_horizon=forecast_horizon)
+    latest_candle = candles[-1]
+    signal_source = normalize_signal_source(latest_candle.source)
     return ActionReadOut(
         label=label,
+        model_version=TREND_ENGINE_MODEL_VERSION,
+        run_id=build_run_id(signal_source, latest_candle.timestamp, actual_lookback, forecast_horizon),
         lookback=actual_lookback,
         forecast_horizon=forecast_horizon,
         direction=prediction.direction,
@@ -419,6 +451,7 @@ def build_backtest_csv(report: BacktestReportOut, source: str | None) -> str:
     writer.writerow(
         [
             "source",
+            "model_version",
             "lookback",
             "forecast_horizon",
             "report_sample_size",
@@ -428,6 +461,7 @@ def build_backtest_csv(report: BacktestReportOut, source: str | None) -> str:
             "report_avg_risk_reward_ratio",
             "reference_timestamp",
             "target_timestamp",
+            "run_id",
             "bias",
             "direction",
             "setup_quality",
@@ -444,11 +478,12 @@ def build_backtest_csv(report: BacktestReportOut, source: str | None) -> str:
         ]
     )
 
-    export_source = normalize_requested_source(source) or "all"
+    export_source = report.source or normalize_requested_source(source) or "all"
     for run in report.runs:
         writer.writerow(
             [
                 export_source,
+                report.model_version,
                 report.lookback,
                 report.forecast_horizon,
                 report.sample_size,
@@ -458,6 +493,7 @@ def build_backtest_csv(report: BacktestReportOut, source: str | None) -> str:
                 report.avg_risk_reward_ratio,
                 run.reference_timestamp.isoformat(),
                 run.target_timestamp.isoformat(),
+                run.run_id,
                 run.bias,
                 run.direction,
                 run.setup_quality,
@@ -477,6 +513,22 @@ def build_backtest_csv(report: BacktestReportOut, source: str | None) -> str:
     return csv_buffer.getvalue()
 
 
+def attach_prediction_trace(prediction: PredictionOut, candles: list[PriceCandle]) -> PredictionOut:
+    latest_candle = candles[-1]
+    signal_source = normalize_signal_source(latest_candle.source)
+    return prediction.model_copy(
+        update={
+            "model_version": TREND_ENGINE_MODEL_VERSION,
+            "run_id": build_run_id(
+                signal_source,
+                latest_candle.timestamp,
+                prediction.lookback,
+                prediction.forecast_horizon,
+            ),
+        }
+    )
+
+
 def build_backtest_response(
     db: Session,
     lookback: int,
@@ -494,6 +546,7 @@ def build_backtest_response(
             lookback=lookback,
             forecast_horizon=forecast_horizon,
             sample_size=sample_size,
+            source=source,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -506,6 +559,8 @@ def ensure_prediction_signal_columns() -> None:
 
     existing_columns = {column["name"] for column in inspector.get_columns("prediction_signals")}
     column_definitions = {
+        "model_version": "VARCHAR(64)",
+        "run_id": "VARCHAR(96)",
         "entry_plan": "VARCHAR(255)",
         "entry_level": "FLOAT",
         "invalidation_plan": "VARCHAR(255)",
@@ -537,6 +592,12 @@ def persist_prediction_signal(
     interval = estimate_candle_interval(candles)
     target_timestamp = latest_candle.timestamp + (interval * prediction.forecast_horizon)
     signal_source = normalize_signal_source(latest_candle.source)
+    run_id = prediction.run_id or build_run_id(
+        signal_source,
+        latest_candle.timestamp,
+        prediction.lookback,
+        prediction.forecast_horizon,
+    )
 
     signal = (
         db.query(PredictionSignal)
@@ -568,6 +629,8 @@ def persist_prediction_signal(
             summary=prediction.summary,
             guidance=prediction.guidance,
             what_to_watch=prediction.what_to_watch,
+            model_version=prediction.model_version or TREND_ENGINE_MODEL_VERSION,
+            run_id=run_id,
             entry_plan=prediction.entry_plan,
             entry_level=prediction.entry_level,
             invalidation_plan=prediction.invalidation_plan,
@@ -590,6 +653,8 @@ def persist_prediction_signal(
         signal.summary = prediction.summary
         signal.guidance = prediction.guidance
         signal.what_to_watch = prediction.what_to_watch
+        signal.model_version = prediction.model_version or TREND_ENGINE_MODEL_VERSION
+        signal.run_id = run_id
         signal.entry_plan = prediction.entry_plan
         signal.entry_level = prediction.entry_level
         signal.invalidation_plan = prediction.invalidation_plan
@@ -778,6 +843,7 @@ def predict_direction(
             lookback=payload.lookback,
             forecast_horizon=payload.forecast_horizon,
         )
+        prediction = attach_prediction_trace(prediction, candles)
         persist_prediction_signal(db, candles, prediction)
         return prediction
     except ValueError as exc:

@@ -707,6 +707,7 @@
               <div class="label">Best next step</div>
               <div class="value" id="predDirection">-</div>
               <p class="card-note" id="decisionSummary">Waiting for a fresh read.</p>
+              <div class="history-copy" id="traceMeta">Trace metadata will appear once a live read is available.</div>
             </div>
 
             <div class="prob">
@@ -820,6 +821,7 @@
 
           <div class="history" style="margin-top: 16px;">
             <div class="card-note">Recent backtest runs</div>
+            <div class="history-copy" id="backtestTrace">Trace metadata will appear once a walk-forward report is ready.</div>
             <div id="backtestRuns"></div>
           </div>
         </article>
@@ -1083,6 +1085,9 @@
         document.getElementById("entryPlan").textContent = prediction.entry_plan || "Waiting for a clean entry read.";
         document.getElementById("invalidationPlan").textContent = prediction.invalidation_plan || "Waiting for a clean invalidation level.";
         document.getElementById("targetPlan").textContent = prediction.target_plan || "Waiting for a clean target level.";
+        document.getElementById("traceMeta").textContent = prediction.model_version && prediction.run_id
+          ? `Engine ${prediction.model_version} | Run ${prediction.run_id}`
+          : "Trace metadata is not available for this read yet.";
         const factorList = document.getElementById("factorList");
         factorList.innerHTML = "";
         (prediction.factors || []).slice(0, 4).forEach((factor) => {
@@ -1195,7 +1200,8 @@
           const levelLine = signal.entry_level !== null && signal.entry_level !== undefined
             ? `${fmtMoney(signal.entry_level)} -> ${fmtTradeLevel(signal.target_level, "-")} - ${fmtRiskReward(signal.risk_reward_ratio)}`
             : "";
-          meta.innerHTML = `${new Date(signal.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}<br>${signal.risk_level.toUpperCase()} risk${levelLine ? `<br>${levelLine}` : ""}`;
+          const traceLine = signal.run_id ? `<br>${signal.run_id}` : "";
+          meta.innerHTML = `${new Date(signal.generated_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}<br>${signal.risk_level.toUpperCase()} risk${levelLine ? `<br>${levelLine}` : ""}${traceLine}`;
 
           row.appendChild(status);
           row.appendChild(main);
@@ -1215,6 +1221,7 @@
         if (!report) {
           document.getElementById("backtestBadge").textContent = "Not Ready";
           document.getElementById("backtestSummary").textContent = "Backtest will appear once there is enough candle history for a walk-forward run.";
+          document.getElementById("backtestTrace").textContent = "Trace metadata will appear once a walk-forward report is ready.";
           document.getElementById("backtestSample").textContent = "-";
           document.getElementById("backtestHitRate").textContent = "-";
           document.getElementById("backtestLongHitRate").textContent = "-";
@@ -1229,6 +1236,9 @@
 
         document.getElementById("backtestBadge").textContent = `${report.sample_size} runs`;
         document.getElementById("backtestSummary").textContent = report.summary;
+        document.getElementById("backtestTrace").textContent = report.model_version && report.source
+          ? `Engine ${report.model_version} | Source ${report.source}`
+          : "Trace metadata is not available for this walk-forward report yet.";
         document.getElementById("backtestSample").textContent = `${report.sample_size}`;
         document.getElementById("backtestHitRate").textContent = `${Number(report.hit_rate || 0).toFixed(0)}%`;
         document.getElementById("backtestLongHitRate").textContent = `${Number(report.long_hit_rate || 0).toFixed(0)}%`;
@@ -1265,7 +1275,8 @@
 
           const meta = document.createElement("div");
           meta.className = "history-meta";
-          meta.innerHTML = `${new Date(run.reference_timestamp).toLocaleDateString()}<br>${run.risk_level.toUpperCase()} risk`;
+          const traceLine = run.run_id ? `<br>${run.run_id}` : "";
+          meta.innerHTML = `${new Date(run.reference_timestamp).toLocaleDateString()}<br>${run.risk_level.toUpperCase()} risk${traceLine}`;
 
           row.appendChild(status);
           row.appendChild(main);

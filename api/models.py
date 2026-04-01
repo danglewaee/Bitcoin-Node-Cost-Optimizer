@@ -41,6 +41,8 @@ class PredictionSignal(Base):
     summary = Column(String(255), nullable=False)
     guidance = Column(String(255), nullable=False)
     what_to_watch = Column(String(255), nullable=False)
+    model_version = Column(String(64), nullable=True)
+    run_id = Column(String(96), nullable=True, index=True)
     entry_plan = Column(String(255), nullable=True)
     entry_level = Column(Float, nullable=True)
     invalidation_plan = Column(String(255), nullable=True)

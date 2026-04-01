@@ -11,16 +11,59 @@ import requests
 import uvicorn
 
 
-def stream_preview_candles(collector, stop_event: threading.Event) -> None:
+def load_collector_module(module_name: str, collector_path: Path):
+    spec = importlib.util.spec_from_file_location(module_name, collector_path)
+    collector = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(collector)
+    return collector
+
+
+def configure_preview_collector(preview_mode: str) -> Path:
+    root = Path(__file__).resolve().parents[1]
+    os.environ["API_URL"] = "http://127.0.0.1:8765"
+    os.environ["API_WRITE_KEY"] = "dev-write-key"
+
+    if preview_mode == "market":
+        os.environ["INTERVAL_SECONDS"] = os.getenv("PREVIEW_POLL_SECONDS", "30")
+        os.environ["BOOTSTRAP_CANDLES"] = os.getenv("PREVIEW_BOOTSTRAP_CANDLES", "96")
+        os.environ["CANDLE_INTERVAL_MINUTES"] = os.getenv("PREVIEW_CANDLE_INTERVAL_MINUTES", "15")
+        os.environ["MARKET_API_BASE_URL"] = os.getenv("PREVIEW_MARKET_API_BASE_URL", "https://api.exchange.coinbase.com")
+        os.environ["MARKET_PRODUCT_ID"] = os.getenv("PREVIEW_MARKET_PRODUCT_ID", "BTC-USD")
+        os.environ["MARKET_SOURCE"] = os.getenv("PREVIEW_MARKET_SOURCE", "coinbase-exchange")
+        return root / "collector" / "market_collector.py"
+
+    if preview_mode == "mock":
+        os.environ["INTERVAL_SECONDS"] = os.getenv("PREVIEW_POLL_SECONDS", "1")
+        os.environ["TREND_MODE"] = os.getenv("PREVIEW_TREND_MODE", "auto")
+        os.environ["BOOTSTRAP_CANDLES"] = os.getenv("PREVIEW_BOOTSTRAP_CANDLES", "72")
+        os.environ["START_PRICE_USD"] = os.getenv("PREVIEW_START_PRICE_USD", "65000")
+        os.environ["BASE_VOLUME_BTC"] = os.getenv("PREVIEW_BASE_VOLUME_BTC", "1200")
+        os.environ["VOLATILITY_PCT"] = os.getenv("PREVIEW_VOLATILITY_PCT", "0.75")
+        os.environ["CANDLE_INTERVAL_MINUTES"] = os.getenv("PREVIEW_CANDLE_INTERVAL_MINUTES", "60")
+        return root / "collector" / "mock_collector.py"
+
+    raise RuntimeError("PREVIEW_DATA_MODE must be one of: market, mock")
+
+
+def stream_preview_candles(collector, preview_mode: str, stop_event: threading.Event) -> None:
     while not stop_event.is_set():
-        collector.post_candle(collector.generate_mock_candle())
-        stop_event.wait(1.0)
+        try:
+            if preview_mode == "market":
+                for candle in collector.fetch_latest_market_candles(window_candles=2):
+                    collector.post_candle(candle)
+            else:
+                collector.post_candle(collector.generate_mock_candle())
+        except requests.RequestException as exc:
+            print(f"preview feed failed: {exc}", flush=True)
+        stop_event.wait(float(os.getenv("INTERVAL_SECONDS", "1")))
 
 
 def main() -> None:
     root = Path(__file__).resolve().parents[1]
     api_dir = root / "api"
-    collector_path = root / "collector" / "mock_collector.py"
+    preview_mode = os.getenv("PREVIEW_DATA_MODE", "market").strip().lower()
+    collector_path = configure_preview_collector(preview_mode)
     runtime_db = api_dir / "preview_stack.db"
     if runtime_db.exists():
         runtime_db.unlink()
@@ -51,34 +94,23 @@ def main() -> None:
     else:
         raise RuntimeError("API did not start")
 
+    collector = load_collector_module("collector_preview", collector_path)
+    collector.validate_env()
+    collector.bootstrap_history()
+    if preview_mode == "mock":
+        for _ in range(6):
+            collector.post_candle(collector.generate_mock_candle())
+
     handler = partial(SimpleHTTPRequestHandler, directory=str(root / "dashboard"))
     dashboard_server = ThreadingHTTPServer(("127.0.0.1", 8899), handler)
     dashboard_thread = threading.Thread(target=dashboard_server.serve_forever, daemon=True)
     dashboard_thread.start()
 
-    os.environ["API_URL"] = "http://127.0.0.1:8765"
-    os.environ["API_WRITE_KEY"] = "dev-write-key"
-    os.environ["INTERVAL_SECONDS"] = "1"
-    os.environ["TREND_MODE"] = "auto"
-    os.environ["BOOTSTRAP_CANDLES"] = "72"
-    os.environ["START_PRICE_USD"] = "65000"
-    os.environ["BASE_VOLUME_BTC"] = "1200"
-    os.environ["VOLATILITY_PCT"] = "0.75"
-    os.environ["CANDLE_INTERVAL_MINUTES"] = "60"
-
-    spec = importlib.util.spec_from_file_location("collector_preview", collector_path)
-    collector = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(collector)
-    collector.validate_env()
-    collector.bootstrap_history()
-    for _ in range(6):
-        collector.post_candle(collector.generate_mock_candle())
     feed_stop = threading.Event()
-    feed_thread = threading.Thread(target=stream_preview_candles, args=(collector, feed_stop), daemon=True)
+    feed_thread = threading.Thread(target=stream_preview_candles, args=(collector, preview_mode, feed_stop), daemon=True)
     feed_thread.start()
 
-    print("PREVIEW_READY http://127.0.0.1:8899/?read_api_key=dev-read-key", flush=True)
+    print(f"PREVIEW_READY mode={preview_mode} http://127.0.0.1:8899/?read_api_key=dev-read-key", flush=True)
     try:
         while True:
             time.sleep(60)

@@ -67,7 +67,7 @@ $process = Start-Process `
 
 Set-Content -Path $pidFile -Value $process.Id
 
-$deadline = (Get-Date).AddSeconds(25)
+$deadline = (Get-Date).AddSeconds(45)
 while ((Get-Date) -lt $deadline) {
   Start-Sleep -Milliseconds 500
 

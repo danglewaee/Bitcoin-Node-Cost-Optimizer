@@ -122,6 +122,15 @@ Run the offline benchmark:
 python benchmarks/run_offline_benchmarks.py
 ```
 
+## Local Preview
+- `start-dev.ps1` now boots the preview stack with live `BTC-USD` market candles by default.
+- To force the preview back to synthetic mode, set `PREVIEW_DATA_MODE=mock` before running the script.
+- Optional preview env overrides:
+  - `PREVIEW_MARKET_PRODUCT_ID` (default `BTC-USD`)
+  - `PREVIEW_CANDLE_INTERVAL_MINUTES` (default `15`)
+  - `PREVIEW_BOOTSTRAP_CANDLES` (default `96`)
+  - `PREVIEW_POLL_SECONDS` (default `30`)
+
 ## Test
 ```bash
 cd api

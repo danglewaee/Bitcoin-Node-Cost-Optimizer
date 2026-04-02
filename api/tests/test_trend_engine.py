@@ -69,6 +69,110 @@ class TrendEngineTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_prediction(candles, lookback=6, forecast_horizon=4)
 
+    def test_summary_regression_for_bullish_series(self):
+        candles = [build_candle(idx, 60000 + (idx * 500), volume_btc=1200) for idx in range(24)]
+        summary = build_trend_summary(candles, lookback=24)
+
+        self.assertEqual(summary.latest_close_price, 71500.0)
+        self.assertEqual(summary.recent_change_pct, 19.17)
+        self.assertEqual(summary.short_sma, 68750.0)
+        self.assertEqual(summary.long_sma, 65750.0)
+        self.assertEqual(summary.momentum_pct, 8.33)
+        self.assertEqual(summary.volatility_pct, 0.04)
+        self.assertEqual(summary.trend_direction, "up")
+        self.assertEqual(summary.trend_strength_score, 97.91)
+        self.assertEqual(summary.support_level, 60000.0)
+        self.assertEqual(summary.resistance_level, 71500.0)
+        self.assertEqual(
+            summary.market_read,
+            "Buyers still have control, but cleaner entries usually come on pullbacks rather than chasing straight into strength.",
+        )
+        self.assertEqual(
+            summary.what_to_watch,
+            "Watch whether BTC can keep holding above $60,000.00 and press into $71,500.00 without losing momentum.",
+        )
+
+    def test_prediction_regression_for_bearish_series(self):
+        candles = [build_candle(idx, 70000 - (idx * 450), volume_btc=1400) for idx in range(24)]
+        prediction = build_prediction(candles, lookback=24, forecast_horizon=6)
+
+        self.assertEqual(prediction.direction, "down")
+        self.assertEqual(prediction.bias, "short")
+        self.assertEqual(prediction.probability_up, 1.93)
+        self.assertEqual(prediction.probability_down, 98.07)
+        self.assertEqual(prediction.confidence_score, 96.14)
+        self.assertEqual(prediction.setup_quality, "A")
+        self.assertEqual(prediction.risk_level, "medium")
+        self.assertEqual(prediction.summary, "Bias stays short for now.")
+        self.assertEqual(
+            prediction.guidance,
+            "Short bias is still on, but the better trade usually comes after a weak bounce, not panic selling.",
+        )
+        self.assertEqual(
+            prediction.what_to_watch,
+            "Watch whether BTC loses $59,650.00 again or gets rejected before it can reclaim $70,000.00.",
+        )
+        self.assertEqual(
+            prediction.entry_plan,
+            "Prefer short entries on a weak bounce toward $62,125.00 instead of selling the flush.",
+        )
+        self.assertEqual(prediction.entry_level, 62125.0)
+        self.assertEqual(
+            prediction.invalidation_plan,
+            "If BTC reclaims $70,350.00, the short read weakens fast.",
+        )
+        self.assertEqual(prediction.invalidation_level, 70350.0)
+        self.assertEqual(
+            prediction.target_plan,
+            "First downside target sits near $47,320.00 if sellers stay in control.",
+        )
+        self.assertEqual(prediction.target_level, 47320.0)
+        self.assertEqual(prediction.risk_reward_ratio, 1.8)
+        self.assertEqual(
+            prediction.factors,
+            [
+                "Short-term price action is still sitting below the base trend.",
+                "Recent candles are still losing ground.",
+                "Price has been weakening across the current read.",
+            ],
+        )
+
+    def test_prediction_regression_for_sideways_series(self):
+        candles = [
+            build_candle(idx, 65000 + ((-1) ** idx) * 80 + idx * 5, volume_btc=1100 + (idx % 3) * 20)
+            for idx in range(24)
+        ]
+        prediction = build_prediction(candles, lookback=24, forecast_horizon=6)
+
+        self.assertEqual(prediction.direction, "sideways")
+        self.assertEqual(prediction.bias, "neutral")
+        self.assertEqual(prediction.probability_up, 48.37)
+        self.assertEqual(prediction.probability_down, 51.63)
+        self.assertEqual(prediction.confidence_score, 3.25)
+        self.assertEqual(prediction.setup_quality, "B")
+        self.assertEqual(prediction.risk_level, "medium")
+        self.assertEqual(prediction.summary, "Best read is to stay patient for now.")
+        self.assertEqual(
+            prediction.guidance,
+            "Best read is to stay patient. Let price break the range cleanly before taking fresh risk.",
+        )
+        self.assertEqual(
+            prediction.what_to_watch,
+            "Watch for a clean break outside the $64,925.00 to $65,190.00 range before taking fresh risk.",
+        )
+        self.assertIsNone(prediction.entry_level)
+        self.assertIsNone(prediction.invalidation_level)
+        self.assertIsNone(prediction.target_level)
+        self.assertIsNone(prediction.risk_reward_ratio)
+        self.assertEqual(
+            prediction.factors,
+            [
+                "Short-term price action is still trading above the base trend.",
+                "Recent candles are still losing ground.",
+                "Price has been weakening across the current read.",
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

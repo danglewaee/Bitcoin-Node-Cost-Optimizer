@@ -14,12 +14,13 @@ from decision_layer import (
     build_watch_text,
     direction_to_bias,
 )
-from engines.heuristic_engine import build_heuristic_decision
+from engines.registry import get_signal_engine
 from feature_builder import build_feature_snapshot, pct_change
 from models import PriceCandle
 from schemas import PredictionOut, TrendSummaryOut
 
-TREND_ENGINE_MODEL_VERSION = "heuristic-trend-engine@2026.04.01"
+ACTIVE_SIGNAL_ENGINE = get_signal_engine()
+TREND_ENGINE_MODEL_VERSION = ACTIVE_SIGNAL_ENGINE.model_version
 
 
 def estimate_candle_interval(candles: list[PriceCandle]) -> timedelta:
@@ -73,9 +74,9 @@ def build_prediction(candles: list[PriceCandle], lookback: int, forecast_horizon
         raise ValueError("At least 12 candles are required to generate a prediction.")
 
     features = build_feature_snapshot(candles, lookback)
-    engine_decision = build_heuristic_decision(features, forecast_horizon)
-    direction = str(engine_decision["direction"])
-    confidence_score = float(engine_decision["confidence_score"])
+    engine_decision = ACTIVE_SIGNAL_ENGINE.score(features, forecast_horizon)
+    direction = engine_decision.direction
+    confidence_score = engine_decision.confidence_score
     bias = direction_to_bias(direction)
     setup_quality = build_setup_quality(direction, confidence_score, features["volatility_pct"])
     risk_level = build_risk_level(direction, confidence_score, features["volatility_pct"], features["recent_change_pct"])
@@ -96,12 +97,13 @@ def build_prediction(candles: list[PriceCandle], lookback: int, forecast_horizon
 
     return PredictionOut(
         generated_at=datetime.now(timezone.utc),
+        model_version=ACTIVE_SIGNAL_ENGINE.model_version,
         lookback=lookback,
         forecast_horizon=forecast_horizon,
         direction=direction,
         bias=bias,
-        probability_up=float(engine_decision["probability_up"]),
-        probability_down=float(engine_decision["probability_down"]),
+        probability_up=engine_decision.probability_up,
+        probability_down=engine_decision.probability_down,
         confidence_score=confidence_score,
         setup_quality=setup_quality,
         risk_level=risk_level,

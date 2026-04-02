@@ -1,8 +1,9 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
+from engines.registry import get_signal_engine
 from models import PriceCandle
-from trend_engine import build_prediction, build_trend_summary
+from trend_engine import TREND_ENGINE_MODEL_VERSION, build_prediction, build_trend_summary
 
 
 def build_candle(index: int, close_price: float, volume_btc: float = 1000.0) -> PriceCandle:
@@ -18,6 +19,12 @@ def build_candle(index: int, close_price: float, volume_btc: float = 1000.0) -> 
 
 
 class TrendEngineTests(unittest.TestCase):
+    def test_registry_defaults_to_heuristic_engine(self):
+        engine = get_signal_engine()
+
+        self.assertEqual(engine.engine_name, "heuristic")
+        self.assertEqual(engine.model_version, TREND_ENGINE_MODEL_VERSION)
+
     def test_build_trend_summary_detects_bullish_series(self):
         candles = [build_candle(idx, 60000 + (idx * 500)) for idx in range(24)]
         summary = build_trend_summary(candles, lookback=24)
@@ -33,6 +40,7 @@ class TrendEngineTests(unittest.TestCase):
         prediction = build_prediction(candles, lookback=24, forecast_horizon=6)
 
         self.assertEqual(prediction.direction, "down")
+        self.assertEqual(prediction.model_version, TREND_ENGINE_MODEL_VERSION)
         self.assertEqual(prediction.bias, "short")
         self.assertGreater(prediction.probability_down, prediction.probability_up)
         self.assertGreaterEqual(prediction.confidence_score, 0)

@@ -196,7 +196,30 @@ class BacktestRunOut(BaseModel):
     outcome_status: Literal["right", "wrong", "flat"]
 
 
+class EngineBacktestSummaryOut(BaseModel):
+    engine_name: str
+    model_version: str
+    sample_size: int
+    hit_rate: float
+    avg_strategy_return_pct: float
+    cumulative_strategy_return_pct: float
+    max_drawdown_pct: float
+    long_hit_rate: float
+    short_hit_rate: float
+
+
+class ShadowComparisonOut(BaseModel):
+    champion: EngineBacktestSummaryOut
+    challenger: EngineBacktestSummaryOut
+    winner: Literal["champion", "challenger", "tie"]
+    hit_rate_delta: float
+    cumulative_edge_delta: float
+    max_drawdown_delta: float
+    summary: str
+
+
 class BacktestReportOut(BaseModel):
+    engine_name: str | None = None
     model_version: str | None = None
     source: str | None = None
     lookback: int
@@ -215,3 +238,4 @@ class BacktestReportOut(BaseModel):
     short_hit_rate: float
     summary: str
     runs: list[BacktestRunOut]
+    shadow_comparison: ShadowComparisonOut | None = None

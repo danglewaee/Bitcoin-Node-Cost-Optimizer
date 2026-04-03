@@ -11,6 +11,8 @@ from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from database import Base, DATABASE_URL, engine, get_db
+from engines.base import BaseSignalEngine
+from engines.registry import get_signal_engine
 from models import PredictionSignal, PriceCandle
 from schemas import (
     ActionReadOut,
@@ -18,6 +20,7 @@ from schemas import (
     BacktestRunOut,
     CandleCreate,
     CandleOut,
+    EngineBacktestSummaryOut,
     MultiReadOut,
     PerformanceBucketOut,
     PredictionOut,
@@ -25,11 +28,13 @@ from schemas import (
     SignalHistoryOut,
     SignalPerformanceOut,
     SignalStatsOut,
+    ShadowComparisonOut,
     TrendSummaryOut,
 )
 from trend_engine import (
     TREND_ENGINE_MODEL_VERSION,
     build_prediction,
+    build_prediction_with_engine,
     build_trend_summary,
     classify_realized_direction,
     estimate_candle_interval,
@@ -119,10 +124,16 @@ def ensure_utc_timestamp(timestamp: datetime) -> datetime:
     return timestamp.astimezone(timezone.utc)
 
 
-def build_run_id(source: str, reference_timestamp: datetime, lookback: int, forecast_horizon: int) -> str:
+def build_run_id(
+    source: str,
+    reference_timestamp: datetime,
+    lookback: int,
+    forecast_horizon: int,
+    model_version: str = TREND_ENGINE_MODEL_VERSION,
+) -> str:
     payload = "|".join(
         [
-            TREND_ENGINE_MODEL_VERSION,
+            model_version,
             source,
             ensure_utc_timestamp(reference_timestamp).isoformat(),
             str(lookback),
@@ -295,7 +306,67 @@ def calculate_max_drawdown(strategy_returns: list[float]) -> float:
     return round(max_drawdown, 2)
 
 
-def build_backtest_report(
+def summarize_engine_backtest(report: BacktestReportOut) -> EngineBacktestSummaryOut:
+    return EngineBacktestSummaryOut(
+        engine_name=report.engine_name or "unknown",
+        model_version=report.model_version or "unknown",
+        sample_size=report.sample_size,
+        hit_rate=report.hit_rate,
+        avg_strategy_return_pct=report.avg_strategy_return_pct,
+        cumulative_strategy_return_pct=report.cumulative_strategy_return_pct,
+        max_drawdown_pct=report.max_drawdown_pct,
+        long_hit_rate=report.long_hit_rate,
+        short_hit_rate=report.short_hit_rate,
+    )
+
+
+def build_shadow_comparison(
+    champion_report: BacktestReportOut,
+    challenger_report: BacktestReportOut,
+) -> ShadowComparisonOut:
+    hit_rate_delta = round(challenger_report.hit_rate - champion_report.hit_rate, 2)
+    cumulative_edge_delta = round(
+        challenger_report.cumulative_strategy_return_pct - champion_report.cumulative_strategy_return_pct,
+        2,
+    )
+    max_drawdown_delta = round(
+        challenger_report.max_drawdown_pct - champion_report.max_drawdown_pct,
+        2,
+    )
+
+    if cumulative_edge_delta > 0.5 and max_drawdown_delta <= 0.5:
+        winner = "challenger"
+        summary = (
+            f"Challenger is ahead by {cumulative_edge_delta:.2f}% cumulative edge while keeping drawdown in range."
+        )
+    elif cumulative_edge_delta < -0.5 and max_drawdown_delta >= -0.5:
+        winner = "champion"
+        summary = (
+            f"Champion is still ahead by {-cumulative_edge_delta:.2f}% cumulative edge, so the challenger has not earned promotion."
+        )
+    elif hit_rate_delta > 5 and max_drawdown_delta <= 0.5:
+        winner = "challenger"
+        summary = f"Challenger is reading direction better so far with a {hit_rate_delta:.2f} point hit-rate edge."
+    elif hit_rate_delta < -5 and max_drawdown_delta >= -0.5:
+        winner = "champion"
+        summary = f"Champion is still more reliable so far with a {-hit_rate_delta:.2f} point hit-rate edge."
+    else:
+        winner = "tie"
+        summary = "Champion and challenger are still too close to separate cleanly on the latest sample."
+
+    return ShadowComparisonOut(
+        champion=summarize_engine_backtest(champion_report),
+        challenger=summarize_engine_backtest(challenger_report),
+        winner=winner,
+        hit_rate_delta=hit_rate_delta,
+        cumulative_edge_delta=cumulative_edge_delta,
+        max_drawdown_delta=max_drawdown_delta,
+        summary=summary,
+    )
+
+
+def evaluate_backtest_for_engine(
+    engine: BaseSignalEngine,
     candles: list[PriceCandle],
     lookback: int,
     forecast_horizon: int,
@@ -318,7 +389,12 @@ def build_backtest_report(
 
     for end_index in active_indexes:
         available_history = candles[: end_index + 1]
-        prediction = build_prediction(available_history, lookback=lookback, forecast_horizon=forecast_horizon)
+        prediction = build_prediction_with_engine(
+            engine,
+            available_history,
+            lookback=lookback,
+            forecast_horizon=forecast_horizon,
+        )
         reference_candle = available_history[-1]
         outcome_candle = candles[end_index + forecast_horizon]
         realized_direction = classify_realized_direction(reference_candle.close_price, outcome_candle.close_price)
@@ -338,8 +414,14 @@ def build_backtest_report(
 
         runs.append(
             BacktestRunOut(
-                model_version=TREND_ENGINE_MODEL_VERSION,
-                run_id=build_run_id(report_source, reference_candle.timestamp, lookback, forecast_horizon),
+                model_version=engine.model_version,
+                run_id=build_run_id(
+                    report_source,
+                    reference_candle.timestamp,
+                    lookback,
+                    forecast_horizon,
+                    model_version=engine.model_version,
+                ),
                 reference_timestamp=reference_candle.timestamp,
                 target_timestamp=outcome_candle.timestamp,
                 direction=prediction.direction,
@@ -395,7 +477,8 @@ def build_backtest_report(
         )
 
     return BacktestReportOut(
-        model_version=TREND_ENGINE_MODEL_VERSION,
+        engine_name=engine.engine_name,
+        model_version=engine.model_version,
         source=report_source,
         lookback=lookback,
         forecast_horizon=forecast_horizon,
@@ -414,6 +497,41 @@ def build_backtest_report(
         summary=summary,
         runs=list(reversed(runs)),
     )
+
+
+def build_backtest_report(
+    candles: list[PriceCandle],
+    lookback: int,
+    forecast_horizon: int,
+    sample_size: int,
+    source: str | None = None,
+) -> BacktestReportOut:
+    active_report = evaluate_backtest_for_engine(
+        get_signal_engine(),
+        candles=candles,
+        lookback=lookback,
+        forecast_horizon=forecast_horizon,
+        sample_size=sample_size,
+        source=source,
+    )
+    champion_report = evaluate_backtest_for_engine(
+        get_signal_engine("heuristic"),
+        candles=candles,
+        lookback=lookback,
+        forecast_horizon=forecast_horizon,
+        sample_size=sample_size,
+        source=source,
+    )
+    challenger_report = evaluate_backtest_for_engine(
+        get_signal_engine("ml_challenger"),
+        candles=candles,
+        lookback=lookback,
+        forecast_horizon=forecast_horizon,
+        sample_size=sample_size,
+        source=source,
+    )
+    active_report.shadow_comparison = build_shadow_comparison(champion_report, challenger_report)
+    return active_report
 
 
 def build_action_read(label: str, candles: list[PriceCandle], lookback: int, forecast_horizon: int) -> ActionReadOut:
@@ -537,7 +655,11 @@ def build_backtest_response(
     sample_size: int,
     source: str | None,
 ) -> BacktestReportOut:
-    required_history = get_required_history_for_prediction(lookback, forecast_horizon)
+    required_history = max(
+        get_required_history_for_prediction(lookback, forecast_horizon, get_signal_engine()),
+        get_required_history_for_prediction(lookback, forecast_horizon, get_signal_engine("heuristic")),
+        get_required_history_for_prediction(lookback, forecast_horizon, get_signal_engine("ml_challenger")),
+    )
     required_candles = max(lookback + forecast_horizon + sample_size, required_history + forecast_horizon + sample_size)
     candles = get_recent_candles(db, required_candles, source=source)
     if not candles:

@@ -213,12 +213,18 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         self.assertIn("avg_risk_reward_ratio", payload)
         self.assertTrue(payload["model_version"])
         self.assertTrue(payload["source"])
+        self.assertTrue(payload["engine_name"])
         self.assertTrue(payload["summary"])
         self.assertGreaterEqual(len(payload["runs"]), 1)
         self.assertIn("strategy_return_pct", payload["runs"][0])
         self.assertIn("outcome_status", payload["runs"][0])
         self.assertTrue(payload["runs"][0]["run_id"])
         self.assertTrue(payload["runs"][0]["model_version"])
+        self.assertIn("shadow_comparison", payload)
+        self.assertIn(payload["shadow_comparison"]["winner"], {"champion", "challenger", "tie"})
+        self.assertEqual(payload["shadow_comparison"]["champion"]["engine_name"], "heuristic")
+        self.assertEqual(payload["shadow_comparison"]["challenger"]["engine_name"], "ml_challenger")
+        self.assertIn("summary", payload["shadow_comparison"])
 
     def test_backtest_export_csv_returns_scoped_rows(self):
         self._seed_series(total=24, source="integration-test", day=1)

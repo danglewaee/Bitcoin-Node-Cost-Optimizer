@@ -820,6 +820,21 @@
           </div>
 
           <div class="history" style="margin-top: 16px;">
+            <div class="card-note">Champion vs Challenger</div>
+            <div class="split-grid">
+              <div class="split-box">
+                <div class="label" id="shadowChampionLabel">Champion</div>
+                <div class="split-list" id="shadowChampion"></div>
+              </div>
+              <div class="split-box">
+                <div class="label" id="shadowChallengerLabel">Challenger</div>
+                <div class="split-list" id="shadowChallenger"></div>
+              </div>
+            </div>
+            <div class="history-copy" id="shadowSummary">Champion-vs-challenger comparison will appear with the next trust report.</div>
+          </div>
+
+          <div class="history" style="margin-top: 16px;">
             <div class="card-note">Recent backtest runs</div>
             <div class="history-copy" id="backtestTrace">Trace metadata will appear once a walk-forward report is ready.</div>
             <div id="backtestRuns"></div>
@@ -1217,6 +1232,49 @@
         }
       }
 
+      function renderShadowComparison(comparison) {
+        const championRoot = document.getElementById("shadowChampion");
+        const challengerRoot = document.getElementById("shadowChallenger");
+        const summaryEl = document.getElementById("shadowSummary");
+        const championLabel = document.getElementById("shadowChampionLabel");
+        const challengerLabel = document.getElementById("shadowChallengerLabel");
+
+        championRoot.innerHTML = "";
+        challengerRoot.innerHTML = "";
+
+        if (!comparison) {
+          summaryEl.textContent = "Champion-vs-challenger comparison will appear with the next trust report.";
+          championLabel.textContent = "Champion";
+          challengerLabel.textContent = "Challenger";
+          championRoot.innerHTML = "<div class=\"history-copy\">No champion read yet.</div>";
+          challengerRoot.innerHTML = "<div class=\"history-copy\">No challenger read yet.</div>";
+          return;
+        }
+
+        championLabel.textContent = `Champion: ${comparison.champion.engine_name}`;
+        challengerLabel.textContent = `Challenger: ${comparison.challenger.engine_name}`;
+        summaryEl.textContent = comparison.summary;
+
+        const renderEngineLines = (root, engineSummary) => {
+          [
+            `Model ${engineSummary.model_version}`,
+            `Hit rate ${Number(engineSummary.hit_rate || 0).toFixed(0)}%`,
+            `Cumulative edge ${fmtSignedPct(engineSummary.cumulative_strategy_return_pct || 0)}`,
+            `Max drawdown ${fmtPct(engineSummary.max_drawdown_pct || 0)}`,
+          ].forEach((text) => {
+            const line = document.createElement("div");
+            line.className = "split-row";
+            const label = document.createElement("span");
+            label.textContent = text;
+            line.appendChild(label);
+            root.appendChild(line);
+          });
+        };
+
+        renderEngineLines(championRoot, comparison.champion);
+        renderEngineLines(challengerRoot, comparison.challenger);
+      }
+
       function renderBacktest(report) {
         if (!report) {
           document.getElementById("backtestBadge").textContent = "Not Ready";
@@ -1230,6 +1288,7 @@
           document.getElementById("backtestCumEdge").textContent = "-";
           document.getElementById("backtestMaxDd").textContent = "-";
           document.getElementById("backtestAvgRr").textContent = "-";
+          renderShadowComparison(null);
           document.getElementById("backtestRuns").innerHTML = "<div class=\"history-copy\">Not enough historical candles yet for a trust report.</div>";
           return;
         }
@@ -1237,7 +1296,7 @@
         document.getElementById("backtestBadge").textContent = `${report.sample_size} runs`;
         document.getElementById("backtestSummary").textContent = report.summary;
         document.getElementById("backtestTrace").textContent = report.model_version && report.source
-          ? `Engine ${report.model_version} | Source ${report.source}`
+          ? `Engine ${report.engine_name || "active"} | ${report.model_version} | Source ${report.source}`
           : "Trace metadata is not available for this walk-forward report yet.";
         document.getElementById("backtestSample").textContent = `${report.sample_size}`;
         document.getElementById("backtestHitRate").textContent = `${Number(report.hit_rate || 0).toFixed(0)}%`;
@@ -1247,6 +1306,7 @@
         document.getElementById("backtestCumEdge").textContent = fmtSignedPct(report.cumulative_strategy_return_pct || 0);
         document.getElementById("backtestMaxDd").textContent = fmtPct(report.max_drawdown_pct || 0);
         document.getElementById("backtestAvgRr").textContent = fmtRiskReward(report.avg_risk_reward_ratio);
+        renderShadowComparison(report.shadow_comparison || null);
 
         const history = document.getElementById("backtestRuns");
         history.innerHTML = "";

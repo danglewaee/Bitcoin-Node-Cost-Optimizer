@@ -23,19 +23,24 @@ class ApiConfigAndAuthTests(unittest.TestCase):
         hit_rate: float,
         cumulative_edge: float,
         max_drawdown: float,
-        window_edge: float,
+        window_edge: float | None = None,
+        window_edges: list[float] | None = None,
+        regimes: list[str] | None = None,
     ):
         runs = []
         base_time = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
         for idx in range(sample_size):
             reference_timestamp = base_time + timedelta(hours=idx)
             target_timestamp = reference_timestamp + timedelta(hours=1)
+            strategy_return_pct = window_edges[idx] if window_edges is not None else (window_edge or 0.0)
+            market_regime = regimes[idx] if regimes is not None else "trend"
             runs.append(
                 main.BacktestRunOut(
                     model_version=model_version,
                     run_id=f"{engine_name}-{idx}",
                     reference_timestamp=reference_timestamp,
                     target_timestamp=target_timestamp,
+                    market_regime=market_regime,
                     direction="up",
                     bias="long",
                     setup_quality="A",
@@ -47,7 +52,7 @@ class ApiConfigAndAuthTests(unittest.TestCase):
                     risk_reward_ratio=2.0,
                     realized_direction="up",
                     realized_change_pct=1.2,
-                    strategy_return_pct=window_edge,
+                    strategy_return_pct=strategy_return_pct,
                     outcome_status="right",
                 )
             )
@@ -63,7 +68,7 @@ class ApiConfigAndAuthTests(unittest.TestCase):
             wrong_rate=round(max(0.0, 100.0 - hit_rate), 2),
             flat_rate=0.0,
             avg_realized_change_pct=1.2,
-            avg_strategy_return_pct=window_edge,
+            avg_strategy_return_pct=round(sum(run.strategy_return_pct for run in runs) / sample_size, 2),
             cumulative_strategy_return_pct=cumulative_edge,
             max_drawdown_pct=max_drawdown,
             avg_confidence_score=70.0,
@@ -166,6 +171,7 @@ class ApiConfigAndAuthTests(unittest.TestCase):
         self.assertTrue(run_id_1.startswith("bttrend-"))
 
     def test_shadow_comparison_promotes_only_when_all_gates_pass(self):
+        regimes = (["trend"] * 18) + (["sideways"] * 6)
         champion = self._make_backtest_report(
             engine_name="heuristic",
             model_version="heuristic-v1",
@@ -173,7 +179,8 @@ class ApiConfigAndAuthTests(unittest.TestCase):
             hit_rate=55.0,
             cumulative_edge=3.0,
             max_drawdown=2.0,
-            window_edge=0.2,
+            window_edges=([0.2] * 18) + ([0.1] * 6),
+            regimes=regimes,
         )
         challenger = self._make_backtest_report(
             engine_name="ml_challenger",
@@ -182,7 +189,8 @@ class ApiConfigAndAuthTests(unittest.TestCase):
             hit_rate=59.0,
             cumulative_edge=4.4,
             max_drawdown=2.3,
-            window_edge=0.6,
+            window_edges=([0.6] * 18) + ([0.15] * 6),
+            regimes=regimes,
         )
 
         comparison = main.build_shadow_comparison(champion, challenger)
@@ -190,7 +198,7 @@ class ApiConfigAndAuthTests(unittest.TestCase):
         self.assertEqual(comparison.recommendation, "promote_challenger")
         self.assertTrue(comparison.promotion_ready)
         self.assertEqual(comparison.winner, "challenger")
-        self.assertEqual(len(comparison.threshold_checks), 5)
+        self.assertEqual(len(comparison.threshold_checks), 7)
         self.assertTrue(all(gate.passed for gate in comparison.threshold_checks))
 
     def test_shadow_comparison_collects_more_data_below_sample_floor(self):
@@ -219,6 +227,37 @@ class ApiConfigAndAuthTests(unittest.TestCase):
         self.assertFalse(comparison.promotion_ready)
         self.assertEqual(comparison.threshold_checks[0].key, "sample_size")
         self.assertFalse(comparison.threshold_checks[0].passed)
+
+    def test_shadow_comparison_holds_champion_when_sideways_regime_is_weak(self):
+        regimes = (["trend"] * 18) + (["sideways"] * 6)
+        champion = self._make_backtest_report(
+            engine_name="heuristic",
+            model_version="heuristic-v1",
+            sample_size=24,
+            hit_rate=55.0,
+            cumulative_edge=3.0,
+            max_drawdown=2.0,
+            window_edges=([0.2] * 18) + ([0.0] * 6),
+            regimes=regimes,
+        )
+        challenger = self._make_backtest_report(
+            engine_name="ml_challenger",
+            model_version="ml-v1",
+            sample_size=24,
+            hit_rate=60.0,
+            cumulative_edge=4.2,
+            max_drawdown=2.3,
+            window_edges=([0.45] * 18) + ([-0.4] * 6),
+            regimes=regimes,
+        )
+
+        comparison = main.build_shadow_comparison(champion, challenger)
+
+        self.assertEqual(comparison.recommendation, "hold_champion")
+        self.assertFalse(comparison.promotion_ready)
+        sideways_gate = next(gate for gate in comparison.threshold_checks if gate.key == "sideways_regime")
+        self.assertEqual(sideways_gate.status, "fail")
+        self.assertFalse(sideways_gate.passed)
 
     def test_routes_protected_in_p15_scope(self):
         read_routes = {

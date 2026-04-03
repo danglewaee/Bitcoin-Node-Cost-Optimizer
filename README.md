@@ -107,7 +107,7 @@ Notes for market mode:
 Most read endpoints accept an optional `source` query param so the dashboard can stay scoped to one feed instead of mixing `mock` with live market data.
 The default champion engine is still `heuristic`. An experimental challenger can be enabled at process start with `SIGNAL_ENGINE=ml_challenger`; it uses a pure-Python logistic baseline trained only on prior windows from the same candle stream.
 `/backtest/report` now also includes a `shadow_comparison` block so the dashboard can compare the heuristic champion against the ML challenger on the same recent windows.
-The same block carries explicit promotion gates: sample size, hit-rate edge, cumulative edge, drawdown penalty, and walk-forward window consistency.
+The same block carries explicit promotion gates: global sample size, hit-rate edge, cumulative edge, drawdown penalty, walk-forward window consistency, plus separate `trend` and `sideways` regime checks.
 
 Example prediction request:
 ```bash

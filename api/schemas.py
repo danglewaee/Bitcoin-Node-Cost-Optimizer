@@ -181,6 +181,7 @@ class BacktestRunOut(BaseModel):
     run_id: str | None = None
     reference_timestamp: datetime
     target_timestamp: datetime
+    market_regime: Literal["trend", "sideways"]
     direction: Literal["up", "down", "sideways"]
     bias: Literal["long", "short", "neutral"]
     setup_quality: Literal["A", "B", "C"]
@@ -211,10 +212,20 @@ class EngineBacktestSummaryOut(BaseModel):
 class PromotionGateOut(BaseModel):
     key: str
     label: str
+    status: Literal["pass", "fail", "warming_up"]
     passed: bool
     actual_value: float
     threshold_value: float
     detail: str
+
+
+class RegimeComparisonOut(BaseModel):
+    regime: Literal["trend", "sideways"]
+    sample_size: int
+    challenger_window_win_rate: float
+    hit_rate_delta: float
+    cumulative_edge_delta: float
+    max_drawdown_delta: float
 
 
 class ShadowComparisonOut(BaseModel):
@@ -228,6 +239,7 @@ class ShadowComparisonOut(BaseModel):
     max_drawdown_delta: float
     challenger_window_win_rate: float
     threshold_checks: list[PromotionGateOut]
+    regime_breakdown: list[RegimeComparisonOut]
     summary: str
 
 

@@ -882,6 +882,12 @@
         return "Hold Champion";
       }
 
+      function gateStatusLabel(value) {
+        if (value === "pass") return "PASS";
+        if (value === "warming_up") return "WARMING";
+        return "HOLD";
+      }
+
       function readSourceInput() {
         return (document.getElementById("sourceInput").value || "").trim();
       }
@@ -1291,9 +1297,26 @@
             const line = document.createElement("div");
             line.className = "split-row";
             const label = document.createElement("span");
-            label.textContent = `${gate.passed ? "PASS" : "HOLD"} ${gate.label}`;
+            label.textContent = `${gateStatusLabel(gate.status)} ${gate.label}`;
             const value = document.createElement("strong");
             value.textContent = `${Number(gate.actual_value || 0).toFixed(2)} / ${Number(gate.threshold_value || 0).toFixed(2)}`;
+            line.appendChild(label);
+            line.appendChild(value);
+            gatesRoot.appendChild(line);
+
+            const detail = document.createElement("div");
+            detail.className = "history-copy";
+            detail.textContent = gate.detail;
+            gatesRoot.appendChild(detail);
+          });
+
+          (comparison.regime_breakdown || []).forEach((regime) => {
+            const line = document.createElement("div");
+            line.className = "split-row";
+            const label = document.createElement("span");
+            label.textContent = `${regime.regime === "trend" ? "Trend" : "Sideways"} windows`;
+            const value = document.createElement("strong");
+            value.textContent = `${regime.sample_size} | ${Number(regime.challenger_window_win_rate || 0).toFixed(0)}% win`;
             line.appendChild(label);
             line.appendChild(value);
             gatesRoot.appendChild(line);
@@ -1353,7 +1376,7 @@
 
           const copy = document.createElement("div");
           copy.className = "history-copy";
-          copy.textContent = `${fmtSignedPct(run.strategy_return_pct)} edge | realized ${fmtPct(run.realized_change_pct)} | ${fmtRiskReward(run.risk_reward_ratio)}`;
+          copy.textContent = `${run.market_regime} regime | ${fmtSignedPct(run.strategy_return_pct)} edge | realized ${fmtPct(run.realized_change_pct)} | ${fmtRiskReward(run.risk_reward_ratio)}`;
 
           main.appendChild(title);
           main.appendChild(copy);

@@ -26,6 +26,7 @@ from schemas import (
     PredictionOut,
     PredictionRequest,
     PromotionGateOut,
+    RegimeComparisonOut,
     SignalHistoryOut,
     SignalPerformanceOut,
     SignalStatsOut,
@@ -66,6 +67,11 @@ PROMOTION_MIN_HIT_RATE_DELTA = 3.0
 PROMOTION_MIN_CUMULATIVE_EDGE_DELTA = 1.0
 PROMOTION_MAX_DRAWDOWN_PENALTY = 0.5
 PROMOTION_MIN_WINDOW_WIN_RATE = 55.0
+PROMOTION_MIN_TREND_SAMPLE_SIZE = 10
+PROMOTION_MIN_TREND_WINDOW_WIN_RATE = 55.0
+PROMOTION_MIN_SIDEWAYS_SAMPLE_SIZE = 6
+PROMOTION_MIN_SIDEWAYS_EDGE_DELTA = -0.25
+PROMOTION_MAX_SIDEWAYS_DRAWDOWN_PENALTY = 0.25
 
 
 def validate_environment() -> None:
@@ -286,8 +292,12 @@ def build_signal_performance(rows: list[PredictionSignal]) -> SignalPerformanceO
     )
 
 
-def calculate_directional_hit_rate(runs: list[BacktestRunOut], bias: str | None = None) -> float:
-    filtered = [run for run in runs if bias is None or run.bias == bias]
+def calculate_directional_hit_rate(
+    runs: list[BacktestRunOut],
+    bias: str | None = None,
+    market_regime: str | None = None,
+) -> float:
+    filtered = filter_backtest_runs(runs, bias=bias, market_regime=market_regime)
     if not filtered:
         return 0.0
     right_runs = sum(1 for run in filtered if run.outcome_status == "right")
@@ -313,6 +323,49 @@ def calculate_max_drawdown(strategy_returns: list[float]) -> float:
     return round(max_drawdown, 2)
 
 
+def classify_market_regime(candles: list[PriceCandle], lookback: int) -> str:
+    trend_summary = build_trend_summary(candles, lookback=min(lookback, len(candles)))
+    return "sideways" if trend_summary.trend_direction == "sideways" else "trend"
+
+
+def filter_backtest_runs(
+    runs: list[BacktestRunOut],
+    *,
+    bias: str | None = None,
+    market_regime: str | None = None,
+) -> list[BacktestRunOut]:
+    return [
+        run
+        for run in runs
+        if (bias is None or run.bias == bias) and (market_regime is None or run.market_regime == market_regime)
+    ]
+
+
+def collect_comparable_run_pairs(
+    champion_report: BacktestReportOut,
+    challenger_report: BacktestReportOut,
+    market_regime: str | None = None,
+) -> list[tuple[BacktestRunOut, BacktestRunOut]]:
+    champion_runs = {
+        (ensure_utc_timestamp(run.reference_timestamp), ensure_utc_timestamp(run.target_timestamp)): run
+        for run in champion_report.runs
+    }
+    challenger_runs = {
+        (ensure_utc_timestamp(run.reference_timestamp), ensure_utc_timestamp(run.target_timestamp)): run
+        for run in challenger_report.runs
+    }
+
+    pairs: list[tuple[BacktestRunOut, BacktestRunOut]] = []
+    for key, champion_run in champion_runs.items():
+        challenger_run = challenger_runs.get(key)
+        if challenger_run is None:
+            continue
+        if market_regime is not None and champion_run.market_regime != market_regime:
+            continue
+        pairs.append((champion_run, challenger_run))
+    return pairs
+
+
 def summarize_engine_backtest(report: BacktestReportOut) -> EngineBacktestSummaryOut:
     return EngineBacktestSummaryOut(
         engine_name=report.engine_name or "unknown",
@@ -330,24 +383,15 @@ def summarize_engine_backtest(report: BacktestReportOut) -> EngineBacktestSummar
 def calculate_window_win_rate(
     champion_report: BacktestReportOut,
     challenger_report: BacktestReportOut,
+    market_regime: str | None = None,
 ) -> float:
-    champion_runs = {
-        (ensure_utc_timestamp(run.reference_timestamp), ensure_utc_timestamp(run.target_timestamp)): run
-        for run in champion_report.runs
-    }
-    challenger_runs = {
-        (ensure_utc_timestamp(run.reference_timestamp), ensure_utc_timestamp(run.target_timestamp)): run
-        for run in challenger_report.runs
-    }
-    comparable_keys = [key for key in champion_runs if key in challenger_runs]
-    if not comparable_keys:
+    comparable_pairs = collect_comparable_run_pairs(champion_report, challenger_report, market_regime=market_regime)
+    if not comparable_pairs:
         return 0.0
 
     challenger_wins = 0
     decisive_windows = 0
-    for key in comparable_keys:
-        champion_run = champion_runs[key]
-        challenger_run = challenger_runs[key]
+    for champion_run, challenger_run in comparable_pairs:
         if challenger_run.strategy_return_pct == champion_run.strategy_return_pct:
             continue
         decisive_windows += 1
@@ -359,6 +403,59 @@ def calculate_window_win_rate(
     return round((challenger_wins / decisive_windows) * 100.0, 2)
 
 
+def build_regime_comparison(
+    champion_report: BacktestReportOut,
+    challenger_report: BacktestReportOut,
+    regime: str,
+) -> RegimeComparisonOut:
+    champion_runs = filter_backtest_runs(champion_report.runs, market_regime=regime)
+    challenger_runs = filter_backtest_runs(challenger_report.runs, market_regime=regime)
+    comparable_pairs = collect_comparable_run_pairs(champion_report, challenger_report, market_regime=regime)
+
+    champion_hit_rate = calculate_directional_hit_rate(champion_runs)
+    challenger_hit_rate = calculate_directional_hit_rate(challenger_runs)
+    champion_returns = [run.strategy_return_pct for run in champion_runs]
+    challenger_returns = [run.strategy_return_pct for run in challenger_runs]
+
+    return RegimeComparisonOut(
+        regime=regime,  # type: ignore[arg-type]
+        sample_size=len(comparable_pairs),
+        challenger_window_win_rate=calculate_window_win_rate(
+            champion_report,
+            challenger_report,
+            market_regime=regime,
+        ),
+        hit_rate_delta=round(challenger_hit_rate - champion_hit_rate, 2),
+        cumulative_edge_delta=round(sum(challenger_returns) - sum(champion_returns), 2),
+        max_drawdown_delta=round(
+            calculate_max_drawdown(challenger_returns) - calculate_max_drawdown(champion_returns),
+            2,
+        ),
+    )
+
+
+def build_promotion_gate(
+    key: str,
+    label: str,
+    passed: bool,
+    actual_value: float,
+    threshold_value: float,
+    detail: str,
+    *,
+    status: str | None = None,
+) -> PromotionGateOut:
+    resolved_status = status or ("pass" if passed else "fail")
+    return PromotionGateOut(
+        key=key,
+        label=label,
+        status=resolved_status,  # type: ignore[arg-type]
+        passed=passed,
+        actual_value=round(actual_value, 2),
+        threshold_value=round(threshold_value, 2),
+        detail=detail,
+    )
+
+
 def build_promotion_gates(
     champion_report: BacktestReportOut,
     challenger_report: BacktestReportOut,
@@ -366,17 +463,23 @@ def build_promotion_gates(
     cumulative_edge_delta: float,
     max_drawdown_delta: float,
     challenger_window_win_rate: float,
+    regime_breakdown: list[RegimeComparisonOut],
 ) -> list[PromotionGateOut]:
+    regime_map = {item.regime: item for item in regime_breakdown}
+    trend_regime = regime_map.get("trend")
+    sideways_regime = regime_map.get("sideways")
+
     return [
-        PromotionGateOut(
+        build_promotion_gate(
             key="sample_size",
             label="Sample size",
             passed=challenger_report.sample_size >= PROMOTION_MIN_SAMPLE_SIZE,
             actual_value=float(challenger_report.sample_size),
             threshold_value=float(PROMOTION_MIN_SAMPLE_SIZE),
             detail=f"Need at least {PROMOTION_MIN_SAMPLE_SIZE:.0f} walk-forward windows before any promotion call.",
+            status="pass" if challenger_report.sample_size >= PROMOTION_MIN_SAMPLE_SIZE else "warming_up",
         ),
-        PromotionGateOut(
+        build_promotion_gate(
             key="hit_rate_delta",
             label="Hit-rate edge",
             passed=hit_rate_delta >= PROMOTION_MIN_HIT_RATE_DELTA,
@@ -386,7 +489,7 @@ def build_promotion_gates(
                 f"Challenger must lead hit rate by at least {PROMOTION_MIN_HIT_RATE_DELTA:.1f} points."
             ),
         ),
-        PromotionGateOut(
+        build_promotion_gate(
             key="cumulative_edge_delta",
             label="Cumulative edge",
             passed=cumulative_edge_delta >= PROMOTION_MIN_CUMULATIVE_EDGE_DELTA,
@@ -396,7 +499,7 @@ def build_promotion_gates(
                 f"Challenger must add at least {PROMOTION_MIN_CUMULATIVE_EDGE_DELTA:.1f}% cumulative edge."
             ),
         ),
-        PromotionGateOut(
+        build_promotion_gate(
             key="max_drawdown_delta",
             label="Drawdown penalty",
             passed=max_drawdown_delta <= PROMOTION_MAX_DRAWDOWN_PENALTY,
@@ -406,7 +509,7 @@ def build_promotion_gates(
                 f"Challenger drawdown cannot be worse by more than {PROMOTION_MAX_DRAWDOWN_PENALTY:.1f} points."
             ),
         ),
-        PromotionGateOut(
+        build_promotion_gate(
             key="window_win_rate",
             label="Window consistency",
             passed=challenger_window_win_rate >= PROMOTION_MIN_WINDOW_WIN_RATE,
@@ -414,6 +517,65 @@ def build_promotion_gates(
             threshold_value=PROMOTION_MIN_WINDOW_WIN_RATE,
             detail=(
                 f"Challenger must win at least {PROMOTION_MIN_WINDOW_WIN_RATE:.0f}% of comparable walk-forward windows."
+            ),
+        ),
+        build_promotion_gate(
+            key="trend_regime",
+            label="Trend regime",
+            passed=(
+                trend_regime is not None
+                and trend_regime.sample_size >= PROMOTION_MIN_TREND_SAMPLE_SIZE
+                and trend_regime.challenger_window_win_rate >= PROMOTION_MIN_TREND_WINDOW_WIN_RATE
+                and trend_regime.cumulative_edge_delta >= 0.0
+            ),
+            actual_value=(
+                float(trend_regime.sample_size)
+                if trend_regime is None or trend_regime.sample_size < PROMOTION_MIN_TREND_SAMPLE_SIZE
+                else trend_regime.challenger_window_win_rate
+            ),
+            threshold_value=(
+                float(PROMOTION_MIN_TREND_SAMPLE_SIZE)
+                if trend_regime is None or trend_regime.sample_size < PROMOTION_MIN_TREND_SAMPLE_SIZE
+                else PROMOTION_MIN_TREND_WINDOW_WIN_RATE
+            ),
+            detail=(
+                f"Need at least {PROMOTION_MIN_TREND_SAMPLE_SIZE:.0f} trend windows, then the challenger must win "
+                f"{PROMOTION_MIN_TREND_WINDOW_WIN_RATE:.0f}% of them without losing edge in directional markets."
+            ),
+            status=(
+                "warming_up"
+                if trend_regime is None or trend_regime.sample_size < PROMOTION_MIN_TREND_SAMPLE_SIZE
+                else None
+            ),
+        ),
+        build_promotion_gate(
+            key="sideways_regime",
+            label="Sideways regime",
+            passed=(
+                sideways_regime is not None
+                and sideways_regime.sample_size >= PROMOTION_MIN_SIDEWAYS_SAMPLE_SIZE
+                and sideways_regime.cumulative_edge_delta >= PROMOTION_MIN_SIDEWAYS_EDGE_DELTA
+                and sideways_regime.max_drawdown_delta <= PROMOTION_MAX_SIDEWAYS_DRAWDOWN_PENALTY
+            ),
+            actual_value=(
+                float(sideways_regime.sample_size)
+                if sideways_regime is None or sideways_regime.sample_size < PROMOTION_MIN_SIDEWAYS_SAMPLE_SIZE
+                else sideways_regime.cumulative_edge_delta
+            ),
+            threshold_value=(
+                float(PROMOTION_MIN_SIDEWAYS_SAMPLE_SIZE)
+                if sideways_regime is None or sideways_regime.sample_size < PROMOTION_MIN_SIDEWAYS_SAMPLE_SIZE
+                else PROMOTION_MIN_SIDEWAYS_EDGE_DELTA
+            ),
+            detail=(
+                f"Need at least {PROMOTION_MIN_SIDEWAYS_SAMPLE_SIZE:.0f} sideways windows, then the challenger cannot "
+                f"lose more than {abs(PROMOTION_MIN_SIDEWAYS_EDGE_DELTA):.2f}% edge or worsen drawdown by more than "
+                f"{PROMOTION_MAX_SIDEWAYS_DRAWDOWN_PENALTY:.2f} in chop."
+            ),
+            status=(
+                "warming_up"
+                if sideways_regime is None or sideways_regime.sample_size < PROMOTION_MIN_SIDEWAYS_SAMPLE_SIZE
+                else None
             ),
         ),
     ]
@@ -433,6 +595,10 @@ def build_shadow_comparison(
         2,
     )
     challenger_window_win_rate = calculate_window_win_rate(champion_report, challenger_report)
+    regime_breakdown = [
+        build_regime_comparison(champion_report, challenger_report, "trend"),
+        build_regime_comparison(champion_report, challenger_report, "sideways"),
+    ]
     threshold_checks = build_promotion_gates(
         champion_report,
         challenger_report,
@@ -440,8 +606,10 @@ def build_shadow_comparison(
         cumulative_edge_delta,
         max_drawdown_delta,
         challenger_window_win_rate,
+        regime_breakdown,
     )
-    failed_checks = [gate for gate in threshold_checks if not gate.passed]
+    failed_checks = [gate for gate in threshold_checks if gate.status == "fail"]
+    warming_checks = [gate for gate in threshold_checks if gate.status == "warming_up"]
 
     if cumulative_edge_delta > 0.5 and hit_rate_delta >= 0 and max_drawdown_delta <= 0.5:
         winner = "challenger"
@@ -450,12 +618,12 @@ def build_shadow_comparison(
     else:
         winner = "tie"
 
-    if not threshold_checks[0].passed:
+    if warming_checks:
         recommendation = "collect_more_data"
         promotion_ready = False
+        warm_labels = ", ".join(gate.label.lower() for gate in warming_checks[:3])
         summary = (
-            f"Collect more data first: challenger only has {challenger_report.sample_size} windows, below the "
-            f"{PROMOTION_MIN_SAMPLE_SIZE} window promotion floor."
+            f"Collect more data first: challenger still needs enough evidence across {warm_labels} before any promotion call."
         )
     elif not failed_checks:
         recommendation = "promote_challenger"
@@ -493,6 +661,7 @@ def build_shadow_comparison(
         max_drawdown_delta=max_drawdown_delta,
         challenger_window_win_rate=challenger_window_win_rate,
         threshold_checks=threshold_checks,
+        regime_breakdown=regime_breakdown,
         summary=summary,
     )
 
@@ -529,6 +698,7 @@ def evaluate_backtest_for_engine(
         )
         reference_candle = available_history[-1]
         outcome_candle = candles[end_index + forecast_horizon]
+        market_regime = classify_market_regime(available_history, lookback)
         realized_direction = classify_realized_direction(reference_candle.close_price, outcome_candle.close_price)
 
         if realized_direction == prediction.direction:
@@ -556,6 +726,7 @@ def evaluate_backtest_for_engine(
                 ),
                 reference_timestamp=reference_candle.timestamp,
                 target_timestamp=outcome_candle.timestamp,
+                market_regime=market_regime,  # type: ignore[arg-type]
                 direction=prediction.direction,
                 bias=prediction.bias,
                 setup_quality=prediction.setup_quality,
@@ -709,14 +880,15 @@ def build_backtest_csv(report: BacktestReportOut, source: str | None) -> str:
             "report_hit_rate",
             "report_cumulative_strategy_return_pct",
             "report_max_drawdown_pct",
-            "report_avg_risk_reward_ratio",
-            "reference_timestamp",
-            "target_timestamp",
-            "run_id",
-            "bias",
-            "direction",
-            "setup_quality",
-            "risk_level",
+                "report_avg_risk_reward_ratio",
+                "reference_timestamp",
+                "target_timestamp",
+                "run_id",
+                "market_regime",
+                "bias",
+                "direction",
+                "setup_quality",
+                "risk_level",
             "confidence_score",
             "entry_level",
             "invalidation_level",
@@ -745,6 +917,7 @@ def build_backtest_csv(report: BacktestReportOut, source: str | None) -> str:
                 run.reference_timestamp.isoformat(),
                 run.target_timestamp.isoformat(),
                 run.run_id,
+                run.market_regime,
                 run.bias,
                 run.direction,
                 run.setup_quality,

@@ -25,6 +25,7 @@ from schemas import (
     PerformanceBucketOut,
     PredictionOut,
     PredictionRequest,
+    PromotionGateOut,
     SignalHistoryOut,
     SignalPerformanceOut,
     SignalStatsOut,
@@ -59,6 +60,12 @@ def parse_allowed_origins(raw_value: str) -> list[str]:
 
 
 ALLOWED_ORIGINS = parse_allowed_origins(ALLOWED_ORIGINS_RAW)
+
+PROMOTION_MIN_SAMPLE_SIZE = 24
+PROMOTION_MIN_HIT_RATE_DELTA = 3.0
+PROMOTION_MIN_CUMULATIVE_EDGE_DELTA = 1.0
+PROMOTION_MAX_DRAWDOWN_PENALTY = 0.5
+PROMOTION_MIN_WINDOW_WIN_RATE = 55.0
 
 
 def validate_environment() -> None:
@@ -320,6 +327,98 @@ def summarize_engine_backtest(report: BacktestReportOut) -> EngineBacktestSummar
     )
 
 
+def calculate_window_win_rate(
+    champion_report: BacktestReportOut,
+    challenger_report: BacktestReportOut,
+) -> float:
+    champion_runs = {
+        (ensure_utc_timestamp(run.reference_timestamp), ensure_utc_timestamp(run.target_timestamp)): run
+        for run in champion_report.runs
+    }
+    challenger_runs = {
+        (ensure_utc_timestamp(run.reference_timestamp), ensure_utc_timestamp(run.target_timestamp)): run
+        for run in challenger_report.runs
+    }
+    comparable_keys = [key for key in champion_runs if key in challenger_runs]
+    if not comparable_keys:
+        return 0.0
+
+    challenger_wins = 0
+    decisive_windows = 0
+    for key in comparable_keys:
+        champion_run = champion_runs[key]
+        challenger_run = challenger_runs[key]
+        if challenger_run.strategy_return_pct == champion_run.strategy_return_pct:
+            continue
+        decisive_windows += 1
+        if challenger_run.strategy_return_pct > champion_run.strategy_return_pct:
+            challenger_wins += 1
+
+    if decisive_windows == 0:
+        return 0.0
+    return round((challenger_wins / decisive_windows) * 100.0, 2)
+
+
+def build_promotion_gates(
+    champion_report: BacktestReportOut,
+    challenger_report: BacktestReportOut,
+    hit_rate_delta: float,
+    cumulative_edge_delta: float,
+    max_drawdown_delta: float,
+    challenger_window_win_rate: float,
+) -> list[PromotionGateOut]:
+    return [
+        PromotionGateOut(
+            key="sample_size",
+            label="Sample size",
+            passed=challenger_report.sample_size >= PROMOTION_MIN_SAMPLE_SIZE,
+            actual_value=float(challenger_report.sample_size),
+            threshold_value=float(PROMOTION_MIN_SAMPLE_SIZE),
+            detail=f"Need at least {PROMOTION_MIN_SAMPLE_SIZE:.0f} walk-forward windows before any promotion call.",
+        ),
+        PromotionGateOut(
+            key="hit_rate_delta",
+            label="Hit-rate edge",
+            passed=hit_rate_delta >= PROMOTION_MIN_HIT_RATE_DELTA,
+            actual_value=hit_rate_delta,
+            threshold_value=PROMOTION_MIN_HIT_RATE_DELTA,
+            detail=(
+                f"Challenger must lead hit rate by at least {PROMOTION_MIN_HIT_RATE_DELTA:.1f} points."
+            ),
+        ),
+        PromotionGateOut(
+            key="cumulative_edge_delta",
+            label="Cumulative edge",
+            passed=cumulative_edge_delta >= PROMOTION_MIN_CUMULATIVE_EDGE_DELTA,
+            actual_value=cumulative_edge_delta,
+            threshold_value=PROMOTION_MIN_CUMULATIVE_EDGE_DELTA,
+            detail=(
+                f"Challenger must add at least {PROMOTION_MIN_CUMULATIVE_EDGE_DELTA:.1f}% cumulative edge."
+            ),
+        ),
+        PromotionGateOut(
+            key="max_drawdown_delta",
+            label="Drawdown penalty",
+            passed=max_drawdown_delta <= PROMOTION_MAX_DRAWDOWN_PENALTY,
+            actual_value=max_drawdown_delta,
+            threshold_value=PROMOTION_MAX_DRAWDOWN_PENALTY,
+            detail=(
+                f"Challenger drawdown cannot be worse by more than {PROMOTION_MAX_DRAWDOWN_PENALTY:.1f} points."
+            ),
+        ),
+        PromotionGateOut(
+            key="window_win_rate",
+            label="Window consistency",
+            passed=challenger_window_win_rate >= PROMOTION_MIN_WINDOW_WIN_RATE,
+            actual_value=challenger_window_win_rate,
+            threshold_value=PROMOTION_MIN_WINDOW_WIN_RATE,
+            detail=(
+                f"Challenger must win at least {PROMOTION_MIN_WINDOW_WIN_RATE:.0f}% of comparable walk-forward windows."
+            ),
+        ),
+    ]
+
+
 def build_shadow_comparison(
     champion_report: BacktestReportOut,
     challenger_report: BacktestReportOut,
@@ -333,34 +432,67 @@ def build_shadow_comparison(
         challenger_report.max_drawdown_pct - champion_report.max_drawdown_pct,
         2,
     )
+    challenger_window_win_rate = calculate_window_win_rate(champion_report, challenger_report)
+    threshold_checks = build_promotion_gates(
+        champion_report,
+        challenger_report,
+        hit_rate_delta,
+        cumulative_edge_delta,
+        max_drawdown_delta,
+        challenger_window_win_rate,
+    )
+    failed_checks = [gate for gate in threshold_checks if not gate.passed]
 
-    if cumulative_edge_delta > 0.5 and max_drawdown_delta <= 0.5:
+    if cumulative_edge_delta > 0.5 and hit_rate_delta >= 0 and max_drawdown_delta <= 0.5:
         winner = "challenger"
-        summary = (
-            f"Challenger is ahead by {cumulative_edge_delta:.2f}% cumulative edge while keeping drawdown in range."
-        )
-    elif cumulative_edge_delta < -0.5 and max_drawdown_delta >= -0.5:
+    elif cumulative_edge_delta < -0.5 or hit_rate_delta <= -3 or max_drawdown_delta > 1.0:
         winner = "champion"
-        summary = (
-            f"Champion is still ahead by {-cumulative_edge_delta:.2f}% cumulative edge, so the challenger has not earned promotion."
-        )
-    elif hit_rate_delta > 5 and max_drawdown_delta <= 0.5:
-        winner = "challenger"
-        summary = f"Challenger is reading direction better so far with a {hit_rate_delta:.2f} point hit-rate edge."
-    elif hit_rate_delta < -5 and max_drawdown_delta >= -0.5:
-        winner = "champion"
-        summary = f"Champion is still more reliable so far with a {-hit_rate_delta:.2f} point hit-rate edge."
     else:
         winner = "tie"
-        summary = "Champion and challenger are still too close to separate cleanly on the latest sample."
+
+    if not threshold_checks[0].passed:
+        recommendation = "collect_more_data"
+        promotion_ready = False
+        summary = (
+            f"Collect more data first: challenger only has {challenger_report.sample_size} windows, below the "
+            f"{PROMOTION_MIN_SAMPLE_SIZE} window promotion floor."
+        )
+    elif not failed_checks:
+        recommendation = "promote_challenger"
+        promotion_ready = True
+        summary = (
+            f"Promote challenger: it cleared all gates with {challenger_window_win_rate:.0f}% window wins, "
+            f"{hit_rate_delta:.2f} hit-rate points, and {cumulative_edge_delta:.2f}% more cumulative edge."
+        )
+    else:
+        recommendation = "hold_champion"
+        promotion_ready = False
+        failed_labels = ", ".join(gate.label.lower() for gate in failed_checks[:3])
+        if winner == "challenger":
+            summary = (
+                f"Challenger is ahead on the latest sample, but hold champion until it clears the missing gates: "
+                f"{failed_labels}."
+            )
+        elif winner == "champion":
+            summary = (
+                f"Hold champion: challenger has not earned promotion yet because it is failing {failed_labels}."
+            )
+        else:
+            summary = (
+                f"Hold champion for now: the engines are still too close, and the challenger is missing {failed_labels}."
+            )
 
     return ShadowComparisonOut(
         champion=summarize_engine_backtest(champion_report),
         challenger=summarize_engine_backtest(challenger_report),
         winner=winner,
+        recommendation=recommendation,
+        promotion_ready=promotion_ready,
         hit_rate_delta=hit_rate_delta,
         cumulative_edge_delta=cumulative_edge_delta,
         max_drawdown_delta=max_drawdown_delta,
+        challenger_window_win_rate=challenger_window_win_rate,
+        threshold_checks=threshold_checks,
         summary=summary,
     )
 

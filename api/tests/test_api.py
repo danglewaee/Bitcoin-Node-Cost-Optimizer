@@ -1,6 +1,6 @@
 import os
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test_trend.db")
@@ -14,6 +14,66 @@ import main
 
 
 class ApiConfigAndAuthTests(unittest.TestCase):
+    def _make_backtest_report(
+        self,
+        *,
+        engine_name: str,
+        model_version: str,
+        sample_size: int,
+        hit_rate: float,
+        cumulative_edge: float,
+        max_drawdown: float,
+        window_edge: float,
+    ):
+        runs = []
+        base_time = datetime(2026, 4, 1, 0, 0, tzinfo=timezone.utc)
+        for idx in range(sample_size):
+            reference_timestamp = base_time + timedelta(hours=idx)
+            target_timestamp = reference_timestamp + timedelta(hours=1)
+            runs.append(
+                main.BacktestRunOut(
+                    model_version=model_version,
+                    run_id=f"{engine_name}-{idx}",
+                    reference_timestamp=reference_timestamp,
+                    target_timestamp=target_timestamp,
+                    direction="up",
+                    bias="long",
+                    setup_quality="A",
+                    risk_level="low",
+                    confidence_score=70.0,
+                    entry_level=100.0,
+                    invalidation_level=95.0,
+                    target_level=110.0,
+                    risk_reward_ratio=2.0,
+                    realized_direction="up",
+                    realized_change_pct=1.2,
+                    strategy_return_pct=window_edge,
+                    outcome_status="right",
+                )
+            )
+
+        return main.BacktestReportOut(
+            engine_name=engine_name,
+            model_version=model_version,
+            source="coinbase-exchange:BTC-USD",
+            lookback=48,
+            forecast_horizon=6,
+            sample_size=sample_size,
+            hit_rate=hit_rate,
+            wrong_rate=round(max(0.0, 100.0 - hit_rate), 2),
+            flat_rate=0.0,
+            avg_realized_change_pct=1.2,
+            avg_strategy_return_pct=window_edge,
+            cumulative_strategy_return_pct=cumulative_edge,
+            max_drawdown_pct=max_drawdown,
+            avg_confidence_score=70.0,
+            avg_risk_reward_ratio=2.0,
+            long_hit_rate=hit_rate,
+            short_hit_rate=0.0,
+            summary="test",
+            runs=runs,
+        )
+
     def test_parse_allowed_origins(self):
         parsed = main.parse_allowed_origins("http://a.test, http://b.test")
         self.assertEqual(parsed, ["http://a.test", "http://b.test"])
@@ -104,6 +164,61 @@ class ApiConfigAndAuthTests(unittest.TestCase):
 
         self.assertEqual(run_id_1, run_id_2)
         self.assertTrue(run_id_1.startswith("bttrend-"))
+
+    def test_shadow_comparison_promotes_only_when_all_gates_pass(self):
+        champion = self._make_backtest_report(
+            engine_name="heuristic",
+            model_version="heuristic-v1",
+            sample_size=24,
+            hit_rate=55.0,
+            cumulative_edge=3.0,
+            max_drawdown=2.0,
+            window_edge=0.2,
+        )
+        challenger = self._make_backtest_report(
+            engine_name="ml_challenger",
+            model_version="ml-v1",
+            sample_size=24,
+            hit_rate=59.0,
+            cumulative_edge=4.4,
+            max_drawdown=2.3,
+            window_edge=0.6,
+        )
+
+        comparison = main.build_shadow_comparison(champion, challenger)
+
+        self.assertEqual(comparison.recommendation, "promote_challenger")
+        self.assertTrue(comparison.promotion_ready)
+        self.assertEqual(comparison.winner, "challenger")
+        self.assertEqual(len(comparison.threshold_checks), 5)
+        self.assertTrue(all(gate.passed for gate in comparison.threshold_checks))
+
+    def test_shadow_comparison_collects_more_data_below_sample_floor(self):
+        champion = self._make_backtest_report(
+            engine_name="heuristic",
+            model_version="heuristic-v1",
+            sample_size=12,
+            hit_rate=55.0,
+            cumulative_edge=3.0,
+            max_drawdown=2.0,
+            window_edge=0.2,
+        )
+        challenger = self._make_backtest_report(
+            engine_name="ml_challenger",
+            model_version="ml-v1",
+            sample_size=12,
+            hit_rate=64.0,
+            cumulative_edge=5.2,
+            max_drawdown=2.1,
+            window_edge=0.7,
+        )
+
+        comparison = main.build_shadow_comparison(champion, challenger)
+
+        self.assertEqual(comparison.recommendation, "collect_more_data")
+        self.assertFalse(comparison.promotion_ready)
+        self.assertEqual(comparison.threshold_checks[0].key, "sample_size")
+        self.assertFalse(comparison.threshold_checks[0].passed)
 
     def test_routes_protected_in_p15_scope(self):
         read_routes = {

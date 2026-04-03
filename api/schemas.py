@@ -208,13 +208,26 @@ class EngineBacktestSummaryOut(BaseModel):
     short_hit_rate: float
 
 
+class PromotionGateOut(BaseModel):
+    key: str
+    label: str
+    passed: bool
+    actual_value: float
+    threshold_value: float
+    detail: str
+
+
 class ShadowComparisonOut(BaseModel):
     champion: EngineBacktestSummaryOut
     challenger: EngineBacktestSummaryOut
     winner: Literal["champion", "challenger", "tie"]
+    recommendation: Literal["hold_champion", "promote_challenger", "collect_more_data"]
+    promotion_ready: bool
     hit_rate_delta: float
     cumulative_edge_delta: float
     max_drawdown_delta: float
+    challenger_window_win_rate: float
+    threshold_checks: list[PromotionGateOut]
     summary: str
 
 

@@ -832,6 +832,8 @@
               </div>
             </div>
             <div class="history-copy" id="shadowSummary">Champion-vs-challenger comparison will appear with the next trust report.</div>
+            <div class="history-copy" id="shadowDecision">Promotion decision will appear with the next trust report.</div>
+            <div class="split-list" id="shadowGates" style="margin-top: 10px;"></div>
           </div>
 
           <div class="history" style="margin-top: 16px;">
@@ -872,6 +874,12 @@
 
       function fmtRiskReward(value) {
         return value === null || value === undefined ? "WAIT" : `${Number(value).toFixed(2)}R`;
+      }
+
+      function recommendationLabel(value) {
+        if (value === "promote_challenger") return "Promote Challenger";
+        if (value === "collect_more_data") return "Collect More Data";
+        return "Hold Champion";
       }
 
       function readSourceInput() {
@@ -1236,14 +1244,18 @@
         const championRoot = document.getElementById("shadowChampion");
         const challengerRoot = document.getElementById("shadowChallenger");
         const summaryEl = document.getElementById("shadowSummary");
+        const decisionEl = document.getElementById("shadowDecision");
+        const gatesRoot = document.getElementById("shadowGates");
         const championLabel = document.getElementById("shadowChampionLabel");
         const challengerLabel = document.getElementById("shadowChallengerLabel");
 
         championRoot.innerHTML = "";
         challengerRoot.innerHTML = "";
+        gatesRoot.innerHTML = "";
 
         if (!comparison) {
           summaryEl.textContent = "Champion-vs-challenger comparison will appear with the next trust report.";
+          decisionEl.textContent = "Promotion decision will appear with the next trust report.";
           championLabel.textContent = "Champion";
           challengerLabel.textContent = "Challenger";
           championRoot.innerHTML = "<div class=\"history-copy\">No champion read yet.</div>";
@@ -1251,14 +1263,15 @@
           return;
         }
 
-        championLabel.textContent = `Champion: ${comparison.champion.engine_name}`;
-        challengerLabel.textContent = `Challenger: ${comparison.challenger.engine_name}`;
-        summaryEl.textContent = comparison.summary;
+          championLabel.textContent = `Champion: ${comparison.champion.engine_name}`;
+          challengerLabel.textContent = `Challenger: ${comparison.challenger.engine_name}`;
+          summaryEl.textContent = comparison.summary;
+          decisionEl.textContent = `${recommendationLabel(comparison.recommendation)} | Challenger window wins ${Number(comparison.challenger_window_win_rate || 0).toFixed(0)}%`;
 
-        const renderEngineLines = (root, engineSummary) => {
-          [
-            `Model ${engineSummary.model_version}`,
-            `Hit rate ${Number(engineSummary.hit_rate || 0).toFixed(0)}%`,
+          const renderEngineLines = (root, engineSummary) => {
+            [
+              `Model ${engineSummary.model_version}`,
+              `Hit rate ${Number(engineSummary.hit_rate || 0).toFixed(0)}%`,
             `Cumulative edge ${fmtSignedPct(engineSummary.cumulative_strategy_return_pct || 0)}`,
             `Max drawdown ${fmtPct(engineSummary.max_drawdown_pct || 0)}`,
           ].forEach((text) => {
@@ -1267,13 +1280,25 @@
             const label = document.createElement("span");
             label.textContent = text;
             line.appendChild(label);
-            root.appendChild(line);
-          });
-        };
+              root.appendChild(line);
+            });
+          };
 
-        renderEngineLines(championRoot, comparison.champion);
-        renderEngineLines(challengerRoot, comparison.challenger);
-      }
+          renderEngineLines(championRoot, comparison.champion);
+          renderEngineLines(challengerRoot, comparison.challenger);
+
+          (comparison.threshold_checks || []).forEach((gate) => {
+            const line = document.createElement("div");
+            line.className = "split-row";
+            const label = document.createElement("span");
+            label.textContent = `${gate.passed ? "PASS" : "HOLD"} ${gate.label}`;
+            const value = document.createElement("strong");
+            value.textContent = `${Number(gate.actual_value || 0).toFixed(2)} / ${Number(gate.threshold_value || 0).toFixed(2)}`;
+            line.appendChild(label);
+            line.appendChild(value);
+            gatesRoot.appendChild(line);
+          });
+        }
 
       function renderBacktest(report) {
         if (!report) {

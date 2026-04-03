@@ -222,6 +222,13 @@ class ApiHttpIntegrationTests(unittest.TestCase):
         self.assertTrue(payload["runs"][0]["model_version"])
         self.assertIn("shadow_comparison", payload)
         self.assertIn(payload["shadow_comparison"]["winner"], {"champion", "challenger", "tie"})
+        self.assertIn(
+            payload["shadow_comparison"]["recommendation"],
+            {"hold_champion", "promote_challenger", "collect_more_data"},
+        )
+        self.assertIn("promotion_ready", payload["shadow_comparison"])
+        self.assertIn("challenger_window_win_rate", payload["shadow_comparison"])
+        self.assertEqual(len(payload["shadow_comparison"]["threshold_checks"]), 5)
         self.assertEqual(payload["shadow_comparison"]["champion"]["engine_name"], "heuristic")
         self.assertEqual(payload["shadow_comparison"]["challenger"]["engine_name"], "ml_challenger")
         self.assertIn("summary", payload["shadow_comparison"])

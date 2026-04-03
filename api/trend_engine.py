@@ -14,6 +14,7 @@ from decision_layer import (
     build_watch_text,
     direction_to_bias,
 )
+from engines.base import BaseSignalEngine, EngineContext
 from engines.registry import get_signal_engine
 from feature_builder import build_feature_snapshot, pct_change
 from models import PriceCandle
@@ -21,6 +22,11 @@ from schemas import PredictionOut, TrendSummaryOut
 
 ACTIVE_SIGNAL_ENGINE = get_signal_engine()
 TREND_ENGINE_MODEL_VERSION = ACTIVE_SIGNAL_ENGINE.model_version
+
+
+def get_required_history_for_prediction(lookback: int, forecast_horizon: int, engine: BaseSignalEngine | None = None) -> int:
+    selected_engine = engine or ACTIVE_SIGNAL_ENGINE
+    return max(12, selected_engine.required_history(lookback, forecast_horizon))
 
 
 def estimate_candle_interval(candles: list[PriceCandle]) -> timedelta:
@@ -70,11 +76,27 @@ def build_trend_summary(candles: list[PriceCandle], lookback: int | None = None)
 
 
 def build_prediction(candles: list[PriceCandle], lookback: int, forecast_horizon: int) -> PredictionOut:
+    return build_prediction_with_engine(ACTIVE_SIGNAL_ENGINE, candles, lookback, forecast_horizon)
+
+
+def build_prediction_with_engine(
+    engine: BaseSignalEngine,
+    candles: list[PriceCandle],
+    lookback: int,
+    forecast_horizon: int,
+) -> PredictionOut:
     if len(candles) < 12:
         raise ValueError("At least 12 candles are required to generate a prediction.")
 
-    features = build_feature_snapshot(candles, lookback)
-    engine_decision = ACTIVE_SIGNAL_ENGINE.score(features, forecast_horizon)
+    active_candles = candles[-min(len(candles), lookback) :]
+    features = build_feature_snapshot(active_candles, lookback)
+    context = EngineContext(
+        candles=candles,
+        features=features,
+        lookback=lookback,
+        forecast_horizon=forecast_horizon,
+    )
+    engine_decision = engine.score(context)
     direction = engine_decision.direction
     confidence_score = engine_decision.confidence_score
     bias = direction_to_bias(direction)
@@ -97,7 +119,7 @@ def build_prediction(candles: list[PriceCandle], lookback: int, forecast_horizon
 
     return PredictionOut(
         generated_at=datetime.now(timezone.utc),
-        model_version=ACTIVE_SIGNAL_ENGINE.model_version,
+        model_version=engine.model_version,
         lookback=lookback,
         forecast_horizon=forecast_horizon,
         direction=direction,

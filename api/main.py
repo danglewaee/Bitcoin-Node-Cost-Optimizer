@@ -33,6 +33,7 @@ from trend_engine import (
     build_trend_summary,
     classify_realized_direction,
     estimate_candle_interval,
+    get_required_history_for_prediction,
 )
 
 DEFAULT_ALLOWED_ORIGINS = "http://127.0.0.1:8899,http://localhost:8899,http://127.0.0.1:8080,http://localhost:8080"
@@ -316,9 +317,9 @@ def build_backtest_report(
     report_source = normalize_requested_source(source) or normalize_signal_source(candles[-1].source)
 
     for end_index in active_indexes:
-        history = candles[end_index - lookback + 1 : end_index + 1]
-        prediction = build_prediction(history, lookback=lookback, forecast_horizon=forecast_horizon)
-        reference_candle = history[-1]
+        available_history = candles[: end_index + 1]
+        prediction = build_prediction(available_history, lookback=lookback, forecast_horizon=forecast_horizon)
+        reference_candle = available_history[-1]
         outcome_candle = candles[end_index + forecast_horizon]
         realized_direction = classify_realized_direction(reference_candle.close_price, outcome_candle.close_price)
 
@@ -536,7 +537,8 @@ def build_backtest_response(
     sample_size: int,
     source: str | None,
 ) -> BacktestReportOut:
-    required_candles = lookback + forecast_horizon + sample_size
+    required_history = get_required_history_for_prediction(lookback, forecast_horizon)
+    required_candles = max(lookback + forecast_horizon + sample_size, required_history + forecast_horizon + sample_size)
     candles = get_recent_candles(db, required_candles, source=source)
     if not candles:
         raise HTTPException(status_code=404, detail="No price candles available")
@@ -834,7 +836,8 @@ def predict_direction(
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
-    candles = get_recent_candles(db, payload.lookback, source=source)
+    required_history = get_required_history_for_prediction(payload.lookback, payload.forecast_horizon)
+    candles = get_recent_candles(db, required_history, source=source)
     if not candles:
         raise HTTPException(status_code=404, detail="No price candles available")
     try:
@@ -856,7 +859,12 @@ def multi_reads(
     db: Session = Depends(get_db),
     _auth: None = Depends(require_read_api_key),
 ):
-    candles = get_recent_candles(db, 72, source=source)
+    required_history = max(
+        get_required_history_for_prediction(24, 3),
+        get_required_history_for_prediction(48, 6),
+        get_required_history_for_prediction(72, 12),
+    )
+    candles = get_recent_candles(db, required_history, source=source)
     if not candles:
         raise HTTPException(status_code=404, detail="No price candles available")
     if len(candles) < 12:

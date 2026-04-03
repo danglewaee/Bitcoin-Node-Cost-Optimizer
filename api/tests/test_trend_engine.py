@@ -1,9 +1,16 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
+from engines.ml_challenger_engine import MLChallengerSignalEngine
 from engines.registry import get_signal_engine
 from models import PriceCandle
-from trend_engine import TREND_ENGINE_MODEL_VERSION, build_prediction, build_trend_summary
+from trend_engine import (
+    TREND_ENGINE_MODEL_VERSION,
+    build_prediction,
+    build_prediction_with_engine,
+    build_trend_summary,
+    get_required_history_for_prediction,
+)
 
 
 def build_candle(index: int, close_price: float, volume_btc: float = 1000.0) -> PriceCandle:
@@ -24,6 +31,13 @@ class TrendEngineTests(unittest.TestCase):
 
         self.assertEqual(engine.engine_name, "heuristic")
         self.assertEqual(engine.model_version, TREND_ENGINE_MODEL_VERSION)
+
+    def test_registry_can_return_ml_challenger_engine(self):
+        engine = get_signal_engine("ml_challenger")
+
+        self.assertEqual(engine.engine_name, "ml_challenger")
+        self.assertTrue(engine.model_version.startswith("logistic-challenger@"))
+        self.assertGreater(get_required_history_for_prediction(48, 6, engine), 48)
 
     def test_build_trend_summary_detects_bullish_series(self):
         candles = [build_candle(idx, 60000 + (idx * 500)) for idx in range(24)]
@@ -76,6 +90,22 @@ class TrendEngineTests(unittest.TestCase):
         candles = [build_candle(idx, 60000 + idx) for idx in range(6)]
         with self.assertRaises(ValueError):
             build_prediction(candles, lookback=6, forecast_horizon=4)
+
+    def test_ml_challenger_engine_returns_same_prediction_contract(self):
+        candles = [build_candle(idx, 60000 + (idx * 120), volume_btc=1000 + ((idx % 5) * 75)) for idx in range(180)]
+        challenger = MLChallengerSignalEngine(training_samples=48, epochs=80)
+        prediction = build_prediction_with_engine(challenger, candles, lookback=48, forecast_horizon=6)
+
+        self.assertIn(prediction.direction, {"up", "down", "sideways"})
+        self.assertIn(prediction.bias, {"long", "short", "neutral"})
+        self.assertGreaterEqual(prediction.probability_up, 0.0)
+        self.assertGreaterEqual(prediction.probability_down, 0.0)
+        self.assertLessEqual(prediction.probability_up, 100.0)
+        self.assertLessEqual(prediction.probability_down, 100.0)
+        self.assertEqual(prediction.model_version, challenger.model_version)
+        self.assertTrue(prediction.guidance)
+        self.assertTrue(prediction.what_to_watch)
+        self.assertTrue(prediction.factors)
 
     def test_summary_regression_for_bullish_series(self):
         candles = [build_candle(idx, 60000 + (idx * 500), volume_btc=1200) for idx in range(24)]

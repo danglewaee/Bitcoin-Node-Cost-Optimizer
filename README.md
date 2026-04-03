@@ -105,6 +105,7 @@ Notes for market mode:
 `/predict`, `/signals/recent`, and `/backtest/report` also expose `model_version` and `run_id` so each saved read can be tied back to the exact engine revision that produced it.
 `/backtest/report` runs a recent walk-forward evaluation on historical candles and returns hit rate, edge, drawdown, confidence, and recent backtest runs so the UI can show whether the engine is earning trust.
 Most read endpoints accept an optional `source` query param so the dashboard can stay scoped to one feed instead of mixing `mock` with live market data.
+The default champion engine is still `heuristic`. An experimental challenger can be enabled at process start with `SIGNAL_ENGINE=ml_challenger`; it uses a pure-Python logistic baseline trained only on prior windows from the same candle stream.
 
 Example prediction request:
 ```bash

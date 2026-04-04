@@ -122,6 +122,16 @@
         font-size: 0.86rem;
         line-height: 1.5;
       }
+      .hero-decision {
+        margin-top: 18px;
+        display: grid;
+        gap: 8px;
+      }
+      .hero-action {
+        font-size: clamp(1.4rem, 3vw, 2.2rem);
+        line-height: 1;
+        font-weight: 700;
+      }
       .change-row {
         margin-top: 16px;
         display: flex;
@@ -413,6 +423,35 @@
         display: grid;
         gap: 10px;
       }
+      .audit-panel {
+        margin-top: 16px;
+        border: 1px solid var(--line-soft);
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.02);
+        overflow: hidden;
+      }
+      .audit-toggle {
+        list-style: none;
+        cursor: pointer;
+        padding: 14px 16px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+      }
+      .audit-toggle::-webkit-details-marker {
+        display: none;
+      }
+      .audit-copy {
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.45;
+      }
+      .audit-body {
+        padding: 0 16px 16px;
+        display: grid;
+        gap: 10px;
+      }
       .read-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -610,6 +649,13 @@
               <div class="chip"><strong id="trendDirection">-</strong></div>
               <div class="chip"><strong id="trendStrength">-</strong></div>
             </div>
+            <div class="hero-decision">
+              <div class="price-strip-label">What now</div>
+              <div class="hero-action" id="heroAction">Waiting for a live read.</div>
+              <div class="price-meta" id="heroActionCopy">The action card will summarize the best next step once the latest read is ready.</div>
+              <div class="hero-meta" id="heroTrust">Trust read is loading.</div>
+              <div class="hero-meta" id="heroWatch">Waiting for the next level to watch.</div>
+            </div>
             <div class="price-meta" id="trendNarrative">Waiting for trend summary.</div>
             <div class="hero-meta" id="latestSource">No source data yet.</div>
           </div>
@@ -644,32 +690,27 @@
       <section class="view-shell">
         <div class="view-switcher">
           <button class="view-toggle" id="showTrendBtn" data-view="trend" type="button">
-            <span class="view-kicker">Open View</span>
-            <span class="view-title">Price Trend</span>
-            <span class="view-hint">See what the market is doing right now.</span>
+            <span class="view-kicker">Why</span>
+            <span class="view-title">Why This Read</span>
+            <span class="view-hint">See what the market is doing and where the key levels sit.</span>
           </button>
           <button class="view-toggle" id="showForecastBtn" data-view="forecast" type="button">
-            <span class="view-kicker">Open View</span>
-            <span class="view-title">Action Card</span>
-            <span class="view-hint">See the best next step and how recent reads are performing.</span>
+            <span class="view-kicker">Now</span>
+            <span class="view-title">What To Do Now</span>
+            <span class="view-hint">See the next step, the plan, and the current bias first.</span>
           </button>
           <button class="view-toggle" id="showBacktestBtn" data-view="backtest" type="button">
-            <span class="view-kicker">Open View</span>
-            <span class="view-title">Backtest</span>
-            <span class="view-hint">See whether the engine has earned trust on recent candles.</span>
+            <span class="view-kicker">Trust</span>
+            <span class="view-title">Can I Trust This?</span>
+            <span class="view-hint">See whether the signal is earning trust today before acting on it.</span>
           </button>
         </div>
-
-        <article class="card view-empty" id="viewEmpty">
-          <h2>Choose a view</h2>
-          <p>Pick the market read for context, the action card for a live setup, or the backtest view if you want evidence first.</p>
-        </article>
 
         <article class="card view-panel" id="panelTrend">
           <div class="card-head">
             <div>
-              <h2>Market read</h2>
-              <p class="card-note" id="summaryText">Waiting for the latest market read.</p>
+              <h2>Why this read</h2>
+              <p class="card-note" id="summaryText">Waiting for the latest market context.</p>
             </div>
             <div class="badge" id="windowInfo">Window: -</div>
           </div>
@@ -691,7 +732,7 @@
         <article class="card view-panel" id="panelForecast">
           <div class="card-head">
             <div>
-              <h2>Action card</h2>
+              <h2>What to do now</h2>
               <p class="card-note" id="decisionGuidance">Waiting for a fresh trade read.</p>
             </div>
             <div class="badge" id="forecastBadge">Forecast</div>
@@ -799,7 +840,7 @@
         <article class="card view-panel" id="panelBacktest">
           <div class="card-head">
             <div>
-              <h2>Backtest</h2>
+              <h2>Can I trust this today?</h2>
               <p class="card-note" id="backtestSummary">Waiting for a recent walk-forward report.</p>
             </div>
             <div style="display: grid; gap: 10px; justify-items: end;">
@@ -852,11 +893,19 @@
             </div>
           </div>
 
-          <div class="history" style="margin-top: 16px;">
-            <div class="card-note">Recent backtest runs</div>
-            <div class="history-copy" id="backtestTrace">Trace metadata will appear once a walk-forward report is ready.</div>
-            <div id="backtestRuns"></div>
-          </div>
+          <details class="audit-panel">
+            <summary class="audit-toggle">
+              <div>
+                <div class="label">Audit details</div>
+                <div class="audit-copy">Open this only if you want the run-level evidence behind the trust summary.</div>
+              </div>
+              <div class="badge">Optional</div>
+            </summary>
+            <div class="audit-body">
+              <div class="history-copy" id="backtestTrace">Trace metadata will appear once a walk-forward report is ready.</div>
+              <div id="backtestRuns"></div>
+            </div>
+          </details>
         </article>
       </section>
     </main>
@@ -1113,6 +1162,7 @@
 
         document.getElementById("trendStrength").textContent = `${summary.trend_strength_score.toFixed(0)}/100 conviction`;
         document.getElementById("trendNarrative").textContent = summary.market_read || summary.narrative;
+        document.getElementById("heroWatch").textContent = summary.what_to_watch || "Waiting for the next level to watch.";
         document.getElementById("latestSource").textContent = `Source ${latest.source} | ${new Date(latest.timestamp).toLocaleString()}`;
 
         document.getElementById("shortSma").textContent = fmtMoney(summary.short_sma);
@@ -1134,6 +1184,10 @@
         const directionEl = document.getElementById("predDirection");
         directionEl.textContent = actionLabel(prediction);
         directionEl.className = `value ${directionClass(prediction.direction)}`;
+        const heroAction = document.getElementById("heroAction");
+        heroAction.textContent = actionLabel(prediction);
+        heroAction.className = `hero-action ${directionClass(prediction.direction)}`;
+        document.getElementById("heroActionCopy").textContent = prediction.guidance || prediction.summary;
 
         document.getElementById("forecastBadge").textContent = `${prediction.setup_quality} setup - ${prediction.risk_level} risk`;
         document.getElementById("probUpText").textContent = fmtPct(prediction.probability_up);
@@ -1399,6 +1453,7 @@
           document.getElementById("backtestBadge").textContent = "Not Ready";
           document.getElementById("backtestSummary").textContent = "Backtest will appear once there is enough candle history for a walk-forward run.";
           document.getElementById("backtestTrace").textContent = "Trace metadata will appear once a walk-forward report is ready.";
+          document.getElementById("heroTrust").textContent = "Trust read is still loading.";
           document.getElementById("backtestSample").textContent = "-";
           document.getElementById("backtestHitRate").textContent = "-";
           document.getElementById("backtestLongHitRate").textContent = "-";
@@ -1415,6 +1470,9 @@
 
         document.getElementById("backtestBadge").textContent = `${report.sample_size} runs`;
         document.getElementById("backtestSummary").textContent = report.summary;
+        document.getElementById("heroTrust").textContent = (report.shadow_comparison && report.shadow_comparison.summary)
+          ? `${recommendationLabel(report.shadow_comparison.recommendation)} | ${report.shadow_comparison.summary}`
+          : report.summary;
         document.getElementById("backtestTrace").textContent = report.model_version && report.source
           ? `Engine ${report.engine_name || "active"} | ${report.model_version} | Source ${report.source}`
           : "Trace metadata is not available for this walk-forward report yet.";
@@ -1503,7 +1561,6 @@
       }
 
       function setActiveView(view, updateHash = true) {
-        const emptyState = document.getElementById("viewEmpty");
         const trendPanel = document.getElementById("panelTrend");
         const forecastPanel = document.getElementById("panelForecast");
         const backtestPanel = document.getElementById("panelBacktest");
@@ -1516,7 +1573,6 @@
         trendPanel.classList.toggle("active", view === "trend");
         forecastPanel.classList.toggle("active", view === "forecast");
         backtestPanel.classList.toggle("active", view === "backtest");
-        emptyState.style.display = view ? "none" : "block";
 
         if (!updateHash) {
           return;
@@ -1533,7 +1589,7 @@
           setActiveView(view, false);
           return;
         }
-        setActiveView("", false);
+        setActiveView("forecast", false);
       }
 
       async function runForecast() {

@@ -837,6 +837,22 @@
           </div>
 
           <div class="history" style="margin-top: 16px;">
+            <div class="card-note">Regime-specific read</div>
+            <div class="split-grid">
+              <div class="split-box">
+                <div class="label">Trend regime</div>
+                <div class="history-copy" id="regimeTrendSummary">Trend regime comparison will appear with the next trust report.</div>
+                <div class="split-list" id="regimeTrend"></div>
+              </div>
+              <div class="split-box">
+                <div class="label">Sideways regime</div>
+                <div class="history-copy" id="regimeSidewaysSummary">Sideways regime comparison will appear with the next trust report.</div>
+                <div class="split-list" id="regimeSideways"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="history" style="margin-top: 16px;">
             <div class="card-note">Recent backtest runs</div>
             <div class="history-copy" id="backtestTrace">Trace metadata will appear once a walk-forward report is ready.</div>
             <div id="backtestRuns"></div>
@@ -886,6 +902,28 @@
         if (value === "pass") return "PASS";
         if (value === "warming_up") return "WARMING";
         return "HOLD";
+      }
+
+      function regimeLabel(value) {
+        return value === "sideways" ? "Sideways regime" : "Trend regime";
+      }
+
+      function regimeSummaryText(item) {
+        if (!item || !item.sample_size) {
+          return "Still warming up. More walk-forward windows are needed before this regime read means much.";
+        }
+
+        if (item.regime === "sideways") {
+          if (Number(item.cumulative_edge_delta || 0) >= 0 && Number(item.max_drawdown_delta || 0) <= 0) {
+            return "Challenger is holding up in chop so far without leaking extra drawdown.";
+          }
+          return "Challenger is still leaking edge or drawdown in chop, so the champion remains safer here.";
+        }
+
+        if (Number(item.challenger_window_win_rate || 0) >= 55 && Number(item.cumulative_edge_delta || 0) >= 0) {
+          return "Challenger is reading directional conditions well enough to be taken seriously in trend.";
+        }
+        return "Challenger is not yet consistent enough in directional conditions to replace the champion.";
       }
 
       function readSourceInput() {
@@ -1309,19 +1347,52 @@
             detail.textContent = gate.detail;
             gatesRoot.appendChild(detail);
           });
-
-          (comparison.regime_breakdown || []).forEach((regime) => {
-            const line = document.createElement("div");
-            line.className = "split-row";
-            const label = document.createElement("span");
-            label.textContent = `${regime.regime === "trend" ? "Trend" : "Sideways"} windows`;
-            const value = document.createElement("strong");
-            value.textContent = `${regime.sample_size} | ${Number(regime.challenger_window_win_rate || 0).toFixed(0)}% win`;
-            line.appendChild(label);
-            line.appendChild(value);
-            gatesRoot.appendChild(line);
-          });
         }
+
+      function renderRegimeBreakdown(regimeBreakdown) {
+        const trendRoot = document.getElementById("regimeTrend");
+        const sidewaysRoot = document.getElementById("regimeSideways");
+        const trendSummary = document.getElementById("regimeTrendSummary");
+        const sidewaysSummary = document.getElementById("regimeSidewaysSummary");
+
+        trendRoot.innerHTML = "";
+        sidewaysRoot.innerHTML = "";
+        trendSummary.textContent = "Trend regime comparison will appear with the next trust report.";
+        sidewaysSummary.textContent = "Sideways regime comparison will appear with the next trust report.";
+
+        const items = Array.isArray(regimeBreakdown) ? regimeBreakdown : [];
+        const byRegime = Object.fromEntries(items.map((item) => [item.regime, item]));
+
+        const renderRegime = (root, summaryEl, regimeKey) => {
+          const item = byRegime[regimeKey];
+          if (!item) {
+            root.innerHTML = "<div class=\"history-copy\">No regime-specific read yet.</div>";
+            return;
+          }
+
+          summaryEl.textContent = regimeSummaryText(item);
+          [
+            ["Sample", `${item.sample_size}`],
+            ["Window wins", `${Number(item.challenger_window_win_rate || 0).toFixed(0)}%`],
+            ["Hit-rate delta", fmtSignedPct(item.hit_rate_delta || 0)],
+            ["Edge delta", fmtSignedPct(item.cumulative_edge_delta || 0)],
+            ["Drawdown delta", fmtSignedPct(item.max_drawdown_delta || 0)],
+          ].forEach(([labelText, valueText]) => {
+            const row = document.createElement("div");
+            row.className = "split-row";
+            const label = document.createElement("span");
+            label.textContent = labelText;
+            const value = document.createElement("strong");
+            value.textContent = valueText;
+            row.appendChild(label);
+            row.appendChild(value);
+            root.appendChild(row);
+          });
+        };
+
+        renderRegime(trendRoot, trendSummary, "trend");
+        renderRegime(sidewaysRoot, sidewaysSummary, "sideways");
+      }
 
       function renderBacktest(report) {
         if (!report) {
@@ -1337,6 +1408,7 @@
           document.getElementById("backtestMaxDd").textContent = "-";
           document.getElementById("backtestAvgRr").textContent = "-";
           renderShadowComparison(null);
+          renderRegimeBreakdown(null);
           document.getElementById("backtestRuns").innerHTML = "<div class=\"history-copy\">Not enough historical candles yet for a trust report.</div>";
           return;
         }
@@ -1355,6 +1427,7 @@
         document.getElementById("backtestMaxDd").textContent = fmtPct(report.max_drawdown_pct || 0);
         document.getElementById("backtestAvgRr").textContent = fmtRiskReward(report.avg_risk_reward_ratio);
         renderShadowComparison(report.shadow_comparison || null);
+        renderRegimeBreakdown((report.shadow_comparison || {}).regime_breakdown || []);
 
         const history = document.getElementById("backtestRuns");
         history.innerHTML = "";

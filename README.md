@@ -110,6 +110,7 @@ The default champion engine is still `heuristic`. An experimental challenger can
 The same block carries explicit promotion gates: global sample size, hit-rate edge, cumulative edge, drawdown penalty, walk-forward window consistency, plus separate `trend` and `sideways` regime checks. The dashboard backtest view now breaks those two regimes out into their own panel so you can see where the challenger is actually winning or leaking.
 The dashboard action card also supports local `saved setups`, so a user can keep promising reads in the browser and quickly recheck the same market lens later without going through audit details.
 The dashboard also supports local `bias flip alerts`: you can keep them in-page only, or request browser notification permission and get a popup when the live read changes direction for the same source/lookback/horizon.
+The dashboard also supports a local `user mode` switch: `conservative`, `balanced`, and `aggressive` all use the same backend read, but they change how the action card frames the next step for different trading styles.
 
 Example prediction request:
 ```bash

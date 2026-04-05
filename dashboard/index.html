@@ -413,6 +413,41 @@
         font-size: 0.82rem;
         line-height: 1.45;
       }
+      .card-actions {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        justify-content: flex-end;
+      }
+      .mini-button {
+        padding: 8px 10px;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.04);
+        color: var(--text);
+        font: inherit;
+        font-size: 0.8rem;
+        cursor: pointer;
+      }
+      .mini-button:hover {
+        border-color: rgba(255, 181, 77, 0.3);
+      }
+      .inline-actions {
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+      }
+      .toggle-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+      }
+      .toggle-row input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+      }
       .factors {
         margin: 0;
         padding-left: 18px;
@@ -735,7 +770,10 @@
               <h2>What to do now</h2>
               <p class="card-note" id="decisionGuidance">Waiting for a fresh trade read.</p>
             </div>
-            <div class="badge" id="forecastBadge">Forecast</div>
+            <div class="card-actions">
+              <button class="mini-button" type="button" onclick="saveCurrentSetup()">Save Setup</button>
+              <div class="badge" id="forecastBadge">Forecast</div>
+            </div>
           </div>
 
           <div class="forecast-main">
@@ -800,6 +838,32 @@
             </div>
 
             <ul class="factors" id="factorList"></ul>
+
+            <div class="history">
+              <div class="card-note">Saved setups</div>
+              <div class="history-copy">Save a read you want to revisit. This stays local to your browser for now.</div>
+              <div id="savedSetups"></div>
+            </div>
+
+            <div class="history">
+              <div class="card-note">Alerts</div>
+              <div class="split-grid">
+                <div class="split-box">
+                  <div class="toggle-row">
+                    <div class="label">Bias flip alerts</div>
+                    <input id="biasFlipAlerts" type="checkbox" />
+                  </div>
+                  <div class="history-copy" id="alertState">Keep this on if you want the page to watch for live bias flips.</div>
+                </div>
+                <div class="split-box">
+                  <div class="label">Browser notifications</div>
+                  <button class="mini-button" type="button" onclick="requestBrowserAlerts()">Enable Browser Alerts</button>
+                  <div class="history-copy" id="browserAlertState">Browser alert permission has not been requested yet.</div>
+                </div>
+              </div>
+              <div class="card-note">Recent alerts</div>
+              <div id="alertFeed"></div>
+            </div>
 
             <div class="history">
               <div class="card-note">Recent edge</div>
@@ -913,12 +977,17 @@
     <script>
       const FALLBACK_BASE = "http://127.0.0.1:8765";
       const BACKTEST_SAMPLE_SIZE = 24;
+      const SAVED_SETUPS_KEY = "btc_trend_saved_setups";
+      const ALERT_PREFS_KEY = "btc_trend_alert_prefs";
+      const ALERT_FEED_KEY = "btc_trend_alert_feed";
+      const LAST_BIAS_STATE_KEY = "btc_trend_last_bias_state";
       const qs = new URLSearchParams(window.location.search);
       const urlApiKey = qs.get("read_api_key") || "";
       const urlSource = qs.get("source") || "";
       let apiBase = "";
       let apiKey = urlApiKey || localStorage.getItem("btc_trend_api_key") || "";
       let dataSource = urlSource || localStorage.getItem("btc_trend_source") || "coinbase-exchange:BTC-USD";
+      let latestLiveSnapshot = null;
 
       function fmtMoney(value) {
         return `$${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`;
@@ -1259,6 +1328,214 @@
         });
       }
 
+      function renderSavedSetups(items) {
+        const root = document.getElementById("savedSetups");
+        root.innerHTML = "";
+
+        (items || []).forEach((item) => {
+          const row = document.createElement("div");
+          row.className = "history-row";
+
+          const status = document.createElement("div");
+          status.className = "history-status pending";
+          status.textContent = "Saved";
+
+          const main = document.createElement("div");
+          main.className = "history-main";
+
+          const title = document.createElement("div");
+          title.className = "history-title";
+          title.textContent = `${item.action} - ${item.setup_quality} setup`;
+
+          const copy = document.createElement("div");
+          copy.className = "history-copy";
+          copy.textContent = `${fmtMoney(item.latest_close_price)} | ${item.guidance || item.summary}`;
+
+          const trust = document.createElement("div");
+          trust.className = "history-copy";
+          trust.textContent = `${item.trust_recommendation} | ${item.trust_summary}`;
+
+          main.appendChild(title);
+          main.appendChild(copy);
+          main.appendChild(trust);
+
+          const meta = document.createElement("div");
+          meta.className = "history-meta";
+          meta.innerHTML = `${new Date(item.saved_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}<br>${item.risk_level.toUpperCase()} risk<br>${item.source}`;
+
+          const actions = document.createElement("div");
+          actions.className = "inline-actions";
+
+          const loadButton = document.createElement("button");
+          loadButton.type = "button";
+          loadButton.className = "mini-button";
+          loadButton.textContent = "Recheck";
+          loadButton.addEventListener("click", () => recheckSavedSetup(item.id));
+
+          const removeButton = document.createElement("button");
+          removeButton.type = "button";
+          removeButton.className = "mini-button";
+          removeButton.textContent = "Remove";
+          removeButton.addEventListener("click", () => removeSavedSetup(item.id));
+
+          actions.appendChild(loadButton);
+          actions.appendChild(removeButton);
+          meta.appendChild(actions);
+
+          row.appendChild(status);
+          row.appendChild(main);
+          row.appendChild(meta);
+          root.appendChild(row);
+        });
+
+        if (!root.childElementCount) {
+          root.innerHTML = "<div class=\"history-copy\">No saved setups yet. Save a live read you want to revisit.</div>";
+        }
+      }
+
+      function renderAlertFeed(items) {
+        const root = document.getElementById("alertFeed");
+        root.innerHTML = "";
+
+        (items || []).forEach((item) => {
+          const row = document.createElement("div");
+          row.className = "history-row";
+
+          const status = document.createElement("div");
+          status.className = "history-status pending";
+          status.textContent = "Alert";
+
+          const main = document.createElement("div");
+          main.className = "history-main";
+
+          const title = document.createElement("div");
+          title.className = "history-title";
+          title.textContent = `${item.from_action} -> ${item.to_action}`;
+
+          const copy = document.createElement("div");
+          copy.className = "history-copy";
+          copy.textContent = `${fmtMoney(item.latest_close_price)} | ${item.message}`;
+
+          main.appendChild(title);
+          main.appendChild(copy);
+
+          const meta = document.createElement("div");
+          meta.className = "history-meta";
+          meta.innerHTML = `${new Date(item.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}<br>${item.source}<br>${item.setup_quality} setup`;
+
+          row.appendChild(status);
+          row.appendChild(main);
+          row.appendChild(meta);
+          root.appendChild(row);
+        });
+
+        if (!root.childElementCount) {
+          root.innerHTML = "<div class=\"history-copy\">No live alerts yet. The feed will update when the bias flips.</div>";
+        }
+      }
+
+      function saveCurrentSetup() {
+        if (!latestLiveSnapshot) {
+          setStatus(false, "No Read Yet");
+          return;
+        }
+
+        const nextItem = buildSavedSetup(latestLiveSnapshot);
+        const existing = loadSavedSetups().filter((item) => item.id !== nextItem.id);
+        existing.unshift(nextItem);
+        persistSavedSetups(existing);
+        renderSavedSetups(existing);
+        setStatus(true, "Setup Saved");
+      }
+
+      function removeSavedSetup(setupId) {
+        const nextItems = loadSavedSetups().filter((item) => item.id !== setupId);
+        persistSavedSetups(nextItems);
+        renderSavedSetups(nextItems);
+        setStatus(true, "Setup Removed");
+      }
+
+      function recheckSavedSetup(setupId) {
+        const item = loadSavedSetups().find((entry) => entry.id === setupId);
+        if (!item) {
+          setStatus(false, "Setup Missing");
+          return;
+        }
+
+        document.getElementById("sourceInput").value = item.source || "";
+        document.getElementById("lookback").value = item.lookback || 48;
+        document.getElementById("horizon").value = item.forecast_horizon || 6;
+        setActiveView("forecast");
+        runForecast();
+        setStatus(true, "Setup Reloaded");
+      }
+
+      async function requestBrowserAlerts() {
+        if (!("Notification" in window)) {
+          setStatus(false, "No Notifications");
+          updateBrowserAlertState();
+          return;
+        }
+
+        const result = await Notification.requestPermission();
+        updateBrowserAlertState();
+        if (result === "granted") {
+          setStatus(true, "Alerts Enabled");
+        } else {
+          setStatus(false, "Alerts Blocked");
+        }
+      }
+
+      function maybeTriggerBiasFlipAlert({ summary, latest, prediction, backtest, lookback, forecast_horizon, source }) {
+        const prefs = loadAlertPrefs();
+        const contextKey = `${source || "default"}|${lookback}|${forecast_horizon}`;
+        const state = loadLastBiasState();
+        const previous = state[contextKey];
+
+        state[contextKey] = {
+          bias: prediction.bias,
+          action: actionLabel(prediction),
+          run_id: prediction.run_id || "",
+          saved_at: new Date().toISOString(),
+        };
+        persistLastBiasState(state);
+
+        if (!prefs.bias_flip_enabled || !previous || previous.bias === prediction.bias) {
+          return;
+        }
+
+        const alertItem = {
+          id: prediction.run_id || `alert-${Date.now()}`,
+          created_at: new Date().toISOString(),
+          source,
+          lookback,
+          forecast_horizon,
+          from_bias: previous.bias,
+          to_bias: prediction.bias,
+          from_action: previous.action || previous.bias || "WAIT",
+          to_action: actionLabel(prediction),
+          latest_close_price: summary.latest_close_price,
+          setup_quality: prediction.setup_quality,
+          risk_level: prediction.risk_level,
+          message: `${prediction.guidance || prediction.summary} ${prediction.what_to_watch || ""}`.trim(),
+          trust: backtest && backtest.shadow_comparison
+            ? recommendationLabel(backtest.shadow_comparison.recommendation)
+            : "Trust loading",
+        };
+
+        const nextFeed = [alertItem, ...loadAlertFeed().filter((item) => item.id !== alertItem.id)];
+        persistAlertFeed(nextFeed);
+        renderAlertFeed(nextFeed);
+
+        if ("Notification" in window && Notification.permission === "granted") {
+          new Notification("Bitcoin Trend bias flip", {
+            body: `${alertItem.from_action} -> ${alertItem.to_action} on ${source || "current source"} at ${fmtMoney(alertItem.latest_close_price)}`,
+          });
+        }
+
+        setStatus(true, "Bias Flipped");
+      }
+
       function renderBreakdown(containerId, rows, labelFormatter) {
         const root = document.getElementById(containerId);
         root.innerHTML = "";
@@ -1281,6 +1558,127 @@
           empty.textContent = "Not enough resolved reads yet.";
           root.appendChild(empty);
         }
+      }
+
+      function loadSavedSetups() {
+        try {
+          const raw = localStorage.getItem(SAVED_SETUPS_KEY);
+          const parsed = raw ? JSON.parse(raw) : [];
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+          return [];
+        }
+      }
+
+      function persistSavedSetups(items) {
+        localStorage.setItem(SAVED_SETUPS_KEY, JSON.stringify((items || []).slice(0, 8)));
+      }
+
+      function loadAlertPrefs() {
+        try {
+          const raw = localStorage.getItem(ALERT_PREFS_KEY);
+          const parsed = raw ? JSON.parse(raw) : {};
+          return {
+            bias_flip_enabled: Boolean(parsed.bias_flip_enabled),
+          };
+        } catch (err) {
+          return { bias_flip_enabled: false };
+        }
+      }
+
+      function persistAlertPrefs(prefs) {
+        localStorage.setItem(ALERT_PREFS_KEY, JSON.stringify({
+          bias_flip_enabled: Boolean((prefs || {}).bias_flip_enabled),
+        }));
+      }
+
+      function loadAlertFeed() {
+        try {
+          const raw = localStorage.getItem(ALERT_FEED_KEY);
+          const parsed = raw ? JSON.parse(raw) : [];
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (err) {
+          return [];
+        }
+      }
+
+      function persistAlertFeed(items) {
+        localStorage.setItem(ALERT_FEED_KEY, JSON.stringify((items || []).slice(0, 10)));
+      }
+
+      function loadLastBiasState() {
+        try {
+          const raw = localStorage.getItem(LAST_BIAS_STATE_KEY);
+          const parsed = raw ? JSON.parse(raw) : {};
+          return parsed && typeof parsed === "object" ? parsed : {};
+        } catch (err) {
+          return {};
+        }
+      }
+
+      function persistLastBiasState(state) {
+        localStorage.setItem(LAST_BIAS_STATE_KEY, JSON.stringify(state || {}));
+      }
+
+      function buildSavedSetup(snapshot) {
+        const { summary, latest, prediction, backtest, lookback, forecast_horizon, source } = snapshot;
+        return {
+          id: prediction.run_id || `setup-${Date.now()}`,
+          saved_at: new Date().toISOString(),
+          source,
+          lookback,
+          forecast_horizon,
+          latest_close_price: summary.latest_close_price,
+          action: actionLabel(prediction),
+          direction: prediction.direction,
+          setup_quality: prediction.setup_quality,
+          risk_level: prediction.risk_level,
+          summary: prediction.summary,
+          guidance: prediction.guidance,
+          what_to_watch: prediction.what_to_watch,
+          entry_level: prediction.entry_level,
+          invalidation_level: prediction.invalidation_level,
+          target_level: prediction.target_level,
+          risk_reward_ratio: prediction.risk_reward_ratio,
+          model_version: prediction.model_version || "",
+          run_id: prediction.run_id || "",
+          trust_recommendation: backtest && backtest.shadow_comparison
+            ? recommendationLabel(backtest.shadow_comparison.recommendation)
+            : "Trust loading",
+          trust_summary: backtest && backtest.shadow_comparison
+            ? backtest.shadow_comparison.summary
+            : (backtest ? backtest.summary : "Trust summary was not ready when this setup was saved."),
+          price_time: latest.timestamp,
+        };
+      }
+
+      function updateBrowserAlertState() {
+        const root = document.getElementById("browserAlertState");
+        if (!("Notification" in window)) {
+          root.textContent = "This browser does not support notifications here.";
+          return;
+        }
+
+        if (Notification.permission === "granted") {
+          root.textContent = "Browser alerts are enabled for this page.";
+          return;
+        }
+
+        if (Notification.permission === "denied") {
+          root.textContent = "Browser alerts are blocked. Change the site permission if you want popups.";
+          return;
+        }
+
+        root.textContent = "Browser alert permission has not been requested yet.";
+      }
+
+      function renderAlertPrefs() {
+        const prefs = loadAlertPrefs();
+        document.getElementById("biasFlipAlerts").checked = Boolean(prefs.bias_flip_enabled);
+        document.getElementById("alertState").textContent = prefs.bias_flip_enabled
+          ? "Bias flip alerts are on. The page will flag when the live read changes direction."
+          : "Bias flip alerts are off. Turn them on if you want the page to watch for live bias changes.";
+        updateBrowserAlertState();
       }
 
       function renderPerformance(payload) {
@@ -1630,6 +2028,16 @@
           renderPerformance(performance);
           renderSignalHistory(signals);
           renderBacktest(backtest);
+          latestLiveSnapshot = {
+            summary,
+            latest,
+            prediction,
+            backtest,
+            lookback,
+            forecast_horizon,
+            source: dataSource,
+          };
+          maybeTriggerBiasFlipAlert(latestLiveSnapshot);
           setStatus(true, "Live");
         } catch (err) {
           setStatus(false, "API Unreachable");
@@ -1639,6 +2047,14 @@
 
       document.getElementById("apiKeyInput").value = apiKey;
       document.getElementById("sourceInput").value = dataSource;
+      renderSavedSetups(loadSavedSetups());
+      renderAlertFeed(loadAlertFeed());
+      renderAlertPrefs();
+      document.getElementById("biasFlipAlerts").addEventListener("change", (event) => {
+        const nextPrefs = { bias_flip_enabled: Boolean(event.target.checked) };
+        persistAlertPrefs(nextPrefs);
+        renderAlertPrefs();
+      });
       document.querySelectorAll(".view-toggle").forEach((button) => {
         button.addEventListener("click", () => setActiveView(button.dataset.view));
       });

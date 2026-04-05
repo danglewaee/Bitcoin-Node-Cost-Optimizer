@@ -111,6 +111,7 @@ The same block carries explicit promotion gates: global sample size, hit-rate ed
 The dashboard action card also supports local `saved setups`, so a user can keep promising reads in the browser and quickly recheck the same market lens later without going through audit details.
 The dashboard also supports local `bias flip alerts`: you can keep them in-page only, or request browser notification permission and get a popup when the live read changes direction for the same source/lookback/horizon.
 The dashboard also supports a local `user mode` switch: `conservative`, `balanced`, and `aggressive` all use the same backend read, but they change how the action card frames the next step for different trading styles.
+The dashboard now also shows a short dismissible onboarding note so a new user sees, in one pass, what the page helps with and what it does not do.
 
 Example prediction request:
 ```bash

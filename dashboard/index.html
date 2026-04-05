@@ -231,6 +231,33 @@
         display: grid;
         gap: 16px;
       }
+      .onboarding {
+        padding: 16px 18px;
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.03);
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+      }
+      .onboarding-copy {
+        display: grid;
+        gap: 6px;
+      }
+      .onboarding-title {
+        font-size: 0.86rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+      }
+      .onboarding-body {
+        color: var(--text);
+        line-height: 1.55;
+      }
+      .onboarding-body strong {
+        color: var(--accent);
+      }
       .view-switcher {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -685,7 +712,8 @@
           grid-template-columns: 1fr;
         }
         .hero-top,
-        .chart-meta {
+        .chart-meta,
+        .onboarding {
           display: grid;
         }
       }
@@ -764,6 +792,16 @@
       </section>
 
       <section class="view-shell">
+        <div class="onboarding" id="onboardingBanner">
+          <div class="onboarding-copy">
+            <div class="onboarding-title">Quick read</div>
+            <div class="onboarding-body">
+              Use <strong>What To Do Now</strong> for the live action read, then check <strong>Can I Trust This?</strong> before taking risk.
+              This page helps with short-term BTC direction. It does not predict an exact BTC price target or place trades for you.
+            </div>
+          </div>
+          <button class="mini-button" type="button" onclick="dismissOnboarding()">Got it</button>
+        </div>
         <div class="view-switcher">
           <button class="view-toggle" id="showTrendBtn" data-view="trend" type="button">
             <span class="view-kicker">Why</span>
@@ -1023,6 +1061,7 @@
       const ALERT_FEED_KEY = "btc_trend_alert_feed";
       const LAST_BIAS_STATE_KEY = "btc_trend_last_bias_state";
       const USER_MODE_KEY = "btc_trend_user_mode";
+      const ONBOARDING_DISMISSED_KEY = "btc_trend_onboarding_dismissed";
       const qs = new URLSearchParams(window.location.search);
       const urlApiKey = qs.get("read_api_key") || "";
       const urlSource = qs.get("source") || "";
@@ -1222,6 +1261,20 @@
 
       function persistUserMode(mode) {
         localStorage.setItem(USER_MODE_KEY, mode);
+      }
+
+      function onboardingDismissed() {
+        return localStorage.getItem(ONBOARDING_DISMISSED_KEY) === "true";
+      }
+
+      function dismissOnboarding() {
+        localStorage.setItem(ONBOARDING_DISMISSED_KEY, "true");
+        renderOnboarding();
+      }
+
+      function renderOnboarding() {
+        const banner = document.getElementById("onboardingBanner");
+        banner.style.display = onboardingDismissed() ? "none" : "flex";
       }
 
       function userModeLabel(mode) {
@@ -2206,6 +2259,7 @@
       renderAlertFeed(loadAlertFeed());
       renderAlertPrefs();
       renderUserMode();
+      renderOnboarding();
       document.getElementById("biasFlipAlerts").addEventListener("change", (event) => {
         const nextPrefs = { bias_flip_enabled: Boolean(event.target.checked) };
         persistAlertPrefs(nextPrefs);

@@ -285,6 +285,29 @@
       .state-banner-body {
         line-height: 1.5;
       }
+      .glossary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .glossary-item {
+        padding: 12px 14px;
+        border-radius: 16px;
+        border: 1px solid var(--line-soft);
+        background: rgba(255, 255, 255, 0.025);
+        display: grid;
+        gap: 6px;
+      }
+      .glossary-term {
+        font-size: 0.8rem;
+        text-transform: uppercase;
+        letter-spacing: 0.09em;
+        color: var(--muted);
+      }
+      .glossary-copy {
+        line-height: 1.5;
+        color: var(--text);
+      }
       .view-switcher {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -733,6 +756,7 @@
         .read-grid,
         .performance-grid,
         .split-grid,
+        .glossary-grid,
         .trade-grid,
         .backtest-grid,
         .stats {
@@ -833,6 +857,35 @@
           <div class="state-banner-title" id="systemBannerTitle">Live feed issue</div>
           <div class="state-banner-body" id="systemBannerBody">Bitcoin Trend cannot reach the live feed right now.</div>
         </div>
+        <details class="audit-panel">
+          <summary class="audit-toggle">
+            <div>
+              <div class="label">Soft glossary</div>
+              <div class="audit-copy">Only the four terms people usually trip over on first read.</div>
+            </div>
+            <div class="badge">Optional</div>
+          </summary>
+          <div class="audit-body">
+            <div class="glossary-grid">
+              <div class="glossary-item">
+                <div class="glossary-term">Setup quality</div>
+                <div class="glossary-copy">How clean the price structure looks right now. `A` is cleaner and easier to act on than `C`.</div>
+              </div>
+              <div class="glossary-item">
+                <div class="glossary-term">Risk level</div>
+                <div class="glossary-copy">How easily this read can fail from here. High risk means price can break the idea faster or less cleanly.</div>
+              </div>
+              <div class="glossary-item">
+                <div class="glossary-term">Edge</div>
+                <div class="glossary-copy">How much recent walk-forward reads have been helping or hurting on average. Positive edge means the system has been adding value lately.</div>
+              </div>
+              <div class="glossary-item">
+                <div class="glossary-term">Trust</div>
+                <div class="glossary-copy">Whether recent evidence says the current read is worth leaning on yet. Low trust means wait, size down, or ask for more history.</div>
+              </div>
+            </div>
+          </div>
+        </details>
         <div class="view-switcher">
           <button class="view-toggle" id="showTrendBtn" data-view="trend" type="button">
             <span class="view-kicker">Why</span>

@@ -258,6 +258,33 @@
       .onboarding-body strong {
         color: var(--accent);
       }
+      .state-banner {
+        padding: 14px 16px;
+        border: 1px solid var(--line);
+        border-radius: 18px;
+        display: grid;
+        gap: 6px;
+      }
+      .state-banner.hidden {
+        display: none;
+      }
+      .state-banner.warn {
+        border-color: rgba(255, 181, 77, 0.28);
+        background: rgba(255, 181, 77, 0.08);
+      }
+      .state-banner.error {
+        border-color: rgba(255, 107, 107, 0.32);
+        background: rgba(255, 107, 107, 0.08);
+      }
+      .state-banner-title {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.11em;
+        color: var(--muted);
+      }
+      .state-banner-body {
+        line-height: 1.5;
+      }
       .view-switcher {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -802,6 +829,10 @@
           </div>
           <button class="mini-button" type="button" onclick="dismissOnboarding()">Got it</button>
         </div>
+        <div class="state-banner hidden" id="systemBanner">
+          <div class="state-banner-title" id="systemBannerTitle">Live feed issue</div>
+          <div class="state-banner-body" id="systemBannerBody">Bitcoin Trend cannot reach the live feed right now.</div>
+        </div>
         <div class="view-switcher">
           <button class="view-toggle" id="showTrendBtn" data-view="trend" type="button">
             <span class="view-kicker">Why</span>
@@ -990,6 +1021,10 @@
               <div class="badge" id="backtestBadge">Walk-forward</div>
               <button class="button secondary" type="button" onclick="exportBacktest()">Export CSV</button>
             </div>
+          </div>
+          <div class="state-banner hidden" id="trustBanner" style="margin-top: 14px;">
+            <div class="state-banner-title" id="trustBannerTitle">Trust warming up</div>
+            <div class="state-banner-body" id="trustBannerBody">Bitcoin Trend needs more walk-forward history before the trust read means much.</div>
           </div>
 
           <div class="backtest-grid">
@@ -1218,6 +1253,32 @@
         const status = document.getElementById("status");
         status.innerHTML = `<span class="dot"></span>${text}`;
         status.style.borderColor = ok ? "rgba(67,212,135,0.35)" : "rgba(255,107,107,0.35)";
+      }
+
+      function setBanner(rootId, title, body, tone = "warn") {
+        const root = document.getElementById(rootId);
+        root.className = `state-banner ${tone}`;
+        document.getElementById(`${rootId}Title`).textContent = title;
+        document.getElementById(`${rootId}Body`).textContent = body;
+      }
+
+      function hideBanner(rootId) {
+        document.getElementById(rootId).className = "state-banner hidden";
+      }
+
+      function renderDisconnectedState() {
+        if (latestLiveSnapshot) {
+          return;
+        }
+        document.getElementById("heroAction").textContent = "WAIT";
+        document.getElementById("heroAction").className = "hero-action flat";
+        document.getElementById("heroActionCopy").textContent = "The live feed is down, so there is no fresh action read right now.";
+        document.getElementById("heroTrust").textContent = "Trust read is unavailable until the feed comes back.";
+        document.getElementById("heroWatch").textContent = "Bring the API and collector back, then run the forecast again.";
+        document.getElementById("trendNarrative").textContent = "Bitcoin Trend is waiting for the live feed to respond.";
+        document.getElementById("decisionGuidance").textContent = "No fresh trade read is available because the live feed is down.";
+        document.getElementById("decisionSummary").textContent = "Reconnect the API and collector before acting on this page again.";
+        document.getElementById("backtestSummary").textContent = "Trust read is unavailable while the live feed is down.";
       }
 
       function directionClass(direction) {
@@ -2055,10 +2116,10 @@
 
       function renderBacktest(report) {
         if (!report) {
-          document.getElementById("backtestBadge").textContent = "Not Ready";
-          document.getElementById("backtestSummary").textContent = "Backtest will appear once there is enough candle history for a walk-forward run.";
+          document.getElementById("backtestBadge").textContent = "Warming Up";
+          document.getElementById("backtestSummary").textContent = "Trust is still warming up. Bitcoin Trend needs more candle history before it can score recent reads.";
           document.getElementById("backtestTrace").textContent = "Trace metadata will appear once a walk-forward report is ready.";
-          document.getElementById("heroTrust").textContent = "Trust read is still loading.";
+          document.getElementById("heroTrust").textContent = "Trust is warming up. There is not enough walk-forward history yet.";
           document.getElementById("backtestSample").textContent = "-";
           document.getElementById("backtestHitRate").textContent = "-";
           document.getElementById("backtestLongHitRate").textContent = "-";
@@ -2069,8 +2130,25 @@
           document.getElementById("backtestAvgRr").textContent = "-";
           renderShadowComparison(null);
           renderRegimeBreakdown(null);
-          document.getElementById("backtestRuns").innerHTML = "<div class=\"history-copy\">Not enough historical candles yet for a trust report.</div>";
+          document.getElementById("backtestRuns").innerHTML = "<div class=\"history-copy\">Not enough walk-forward history yet. Let the collector build more candles, then check trust again.</div>";
+          setBanner(
+            "trustBanner",
+            "Trust warming up",
+            "The action read can still load, but the trust layer needs more historical candles before this score means much.",
+            "warn"
+          );
           return;
+        }
+
+        if (report.shadow_comparison && report.shadow_comparison.recommendation === "collect_more_data") {
+          setBanner(
+            "trustBanner",
+            "Trust is still warming up",
+            "The read is live, but recent evidence is still thin. Use smaller size or wait for a cleaner trust read.",
+            "warn"
+          );
+        } else {
+          hideBanner("trustBanner");
         }
 
         document.getElementById("backtestBadge").textContent = `${report.sample_size} runs`;
@@ -2246,9 +2324,19 @@
           renderSignalHistory(signals);
           renderBacktest(backtest);
           maybeTriggerBiasFlipAlert(latestLiveSnapshot);
+          hideBanner("systemBanner");
           setStatus(true, "Live");
         } catch (err) {
-          setStatus(false, "API Unreachable");
+          setBanner(
+            "systemBanner",
+            "Live feed issue",
+            latestLiveSnapshot
+              ? "Bitcoin Trend cannot reach the API right now. The page is still showing the last successful read."
+              : "Bitcoin Trend cannot reach the API right now. Start the API and collector, then run the forecast again.",
+            "error"
+          );
+          renderDisconnectedState();
+          setStatus(false, "Feed Down");
           console.error(err);
         }
       }

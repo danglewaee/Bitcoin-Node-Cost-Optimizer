@@ -308,6 +308,55 @@
         line-height: 1.5;
         color: var(--text);
       }
+      .compare-selects {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      .compare-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+      .compare-card {
+        padding: 14px;
+        border-radius: 18px;
+        border: 1px solid var(--line-soft);
+        background: rgba(255, 255, 255, 0.025);
+        display: grid;
+        gap: 10px;
+      }
+      .compare-card.active {
+        border-color: rgba(255, 181, 77, 0.32);
+        background: rgba(255, 181, 77, 0.08);
+      }
+      .compare-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 10px;
+      }
+      .compare-title {
+        font-weight: 700;
+      }
+      .compare-meta {
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.45;
+      }
+      .compare-rows {
+        display: grid;
+        gap: 8px;
+      }
+      .compare-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 0.9rem;
+      }
+      .compare-row span:first-child {
+        color: var(--muted);
+      }
       .view-switcher {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -757,6 +806,8 @@
         .performance-grid,
         .split-grid,
         .glossary-grid,
+        .compare-grid,
+        .compare-selects,
         .trade-grid,
         .backtest-grid,
         .stats {
@@ -1007,6 +1058,22 @@
               <div class="history-copy">Save a read you want to revisit. This stays local to your browser for now.</div>
               <div id="savedSetups"></div>
             </div>
+            <div class="history">
+              <div class="card-note">Compare saved setups</div>
+              <div class="history-copy">Pick any two saved reads and compare which one looks cleaner, safer, and more trustworthy right now.</div>
+              <div class="compare-selects">
+                <div>
+                  <label class="toolbar-label" for="compareSetupLeft">Left setup</label>
+                  <select id="compareSetupLeft" class="input"></select>
+                </div>
+                <div>
+                  <label class="toolbar-label" for="compareSetupRight">Right setup</label>
+                  <select id="compareSetupRight" class="input"></select>
+                </div>
+              </div>
+              <div class="history-copy" id="compareSetupsSummary">Save two reads and the comparison will appear here.</div>
+              <div class="compare-grid" id="compareSetupsGrid"></div>
+            </div>
 
             <div class="history">
               <div class="card-note">Alerts</div>
@@ -1148,6 +1215,7 @@
       const ALERT_PREFS_KEY = "btc_trend_alert_prefs";
       const ALERT_FEED_KEY = "btc_trend_alert_feed";
       const LAST_BIAS_STATE_KEY = "btc_trend_last_bias_state";
+      const SAVED_COMPARE_KEY = "btc_trend_saved_compare";
       const USER_MODE_KEY = "btc_trend_user_mode";
       const ONBOARDING_DISMISSED_KEY = "btc_trend_onboarding_dismissed";
       const qs = new URLSearchParams(window.location.search);
@@ -1405,6 +1473,62 @@
           return "Aggressive mode is willing to act earlier, but expects tighter risk control and faster invalidation.";
         }
         return "Balanced mode keeps the default read and trust framing.";
+      }
+
+      function setupQualityScore(value) {
+        if (value === "A") return 3;
+        if (value === "B") return 2;
+        if (value === "C") return 1;
+        return 0;
+      }
+
+      function riskLevelScore(value) {
+        if (value === "low") return 3;
+        if (value === "medium") return 2;
+        if (value === "high") return 1;
+        return 0;
+      }
+
+      function trustRecommendationScore(value) {
+        if ((value || "").includes("Promote")) return 3;
+        if ((value || "").includes("Hold")) return 2;
+        if ((value || "").includes("Collect")) return 1;
+        return 0;
+      }
+
+      function rewardRiskScore(value) {
+        const numeric = Number(value || 0);
+        if (!Number.isFinite(numeric)) return 0;
+        return Math.max(0, Math.min(numeric, 3));
+      }
+
+      function savedSetupStrength(item) {
+        return (
+          setupQualityScore(item.setup_quality) * 2 +
+          riskLevelScore(item.risk_level) * 1.5 +
+          trustRecommendationScore(item.trust_recommendation) * 2 +
+          rewardRiskScore(item.risk_reward_ratio)
+        );
+      }
+
+      function loadSavedCompare() {
+        try {
+          const raw = localStorage.getItem(SAVED_COMPARE_KEY);
+          const parsed = raw ? JSON.parse(raw) : {};
+          return {
+            left_id: typeof parsed.left_id === "string" ? parsed.left_id : "",
+            right_id: typeof parsed.right_id === "string" ? parsed.right_id : "",
+          };
+        } catch (err) {
+          return { left_id: "", right_id: "" };
+        }
+      }
+
+      function persistSavedCompare(value) {
+        localStorage.setItem(SAVED_COMPARE_KEY, JSON.stringify({
+          left_id: (value || {}).left_id || "",
+          right_id: (value || {}).right_id || "",
+        }));
       }
 
       function trustRecommendation(report) {
@@ -1707,6 +1831,160 @@
         if (!root.childElementCount) {
           root.innerHTML = "<div class=\"history-copy\">No saved setups yet. Save a live read you want to revisit.</div>";
         }
+        renderSavedSetupCompare(items || []);
+      }
+
+      function savedSetupOptionLabel(item) {
+        return `${new Date(item.saved_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} | ${item.action} | ${item.source}`;
+      }
+
+      function compareWinner(leftItem, rightItem) {
+        const leftStrength = savedSetupStrength(leftItem);
+        const rightStrength = savedSetupStrength(rightItem);
+        const difference = Math.abs(leftStrength - rightStrength);
+
+        if (difference < 1) {
+          return {
+            winner: "",
+            summary: "These two saved reads are close enough that there is no clear winner yet. Pick based on source, timing, and the plan you are more willing to follow.",
+          };
+        }
+
+        const winner = leftStrength > rightStrength ? "left" : "right";
+        const winningItem = winner === "left" ? leftItem : rightItem;
+        const losingItem = winner === "left" ? rightItem : leftItem;
+        const reasons = [];
+
+        if (setupQualityScore(winningItem.setup_quality) > setupQualityScore(losingItem.setup_quality)) {
+          reasons.push("cleaner setup");
+        }
+        if (riskLevelScore(winningItem.risk_level) > riskLevelScore(losingItem.risk_level)) {
+          reasons.push("lower risk");
+        }
+        if (trustRecommendationScore(winningItem.trust_recommendation) > trustRecommendationScore(losingItem.trust_recommendation)) {
+          reasons.push("stronger trust read");
+        }
+        if (rewardRiskScore(winningItem.risk_reward_ratio) > rewardRiskScore(losingItem.risk_reward_ratio) + 0.25) {
+          reasons.push("better reward/risk");
+        }
+
+        const reasonText = reasons.length ? reasons.slice(0, 2).join(" and ") : "a slightly stronger overall profile";
+        return {
+          winner,
+          summary: `${winner === "left" ? "Left" : "Right"} setup currently looks better because it has ${reasonText}.`,
+        };
+      }
+
+      function renderSavedSetupCompare(items) {
+        const leftSelect = document.getElementById("compareSetupLeft");
+        const rightSelect = document.getElementById("compareSetupRight");
+        const summary = document.getElementById("compareSetupsSummary");
+        const grid = document.getElementById("compareSetupsGrid");
+
+        leftSelect.innerHTML = "";
+        rightSelect.innerHTML = "";
+        grid.innerHTML = "";
+
+        if ((items || []).length < 2) {
+          summary.textContent = "Save at least two reads to compare them here.";
+          leftSelect.innerHTML = "<option value=\"\">Need 2 saved reads</option>";
+          rightSelect.innerHTML = "<option value=\"\">Need 2 saved reads</option>";
+          return;
+        }
+
+        const savedCompare = loadSavedCompare();
+        let leftId = savedCompare.left_id;
+        let rightId = savedCompare.right_id;
+        const itemIds = items.map((item) => item.id);
+
+        if (!itemIds.includes(leftId)) {
+          leftId = items[0].id;
+        }
+        if (!itemIds.includes(rightId) || rightId === leftId) {
+          rightId = items.find((item) => item.id !== leftId)?.id || "";
+        }
+
+        const fillOptions = (selectEl, currentId) => {
+          items.forEach((item) => {
+            const option = document.createElement("option");
+            option.value = item.id;
+            option.textContent = savedSetupOptionLabel(item);
+            option.selected = item.id === currentId;
+            selectEl.appendChild(option);
+          });
+        };
+
+        fillOptions(leftSelect, leftId);
+        fillOptions(rightSelect, rightId);
+        persistSavedCompare({ left_id: leftId, right_id: rightId });
+
+        const leftItem = items.find((item) => item.id === leftId);
+        const rightItem = items.find((item) => item.id === rightId);
+
+        if (!leftItem || !rightItem || leftItem.id === rightItem.id) {
+          summary.textContent = "Pick two different saved reads to compare them.";
+          return;
+        }
+
+        const comparison = compareWinner(leftItem, rightItem);
+        summary.textContent = comparison.summary;
+
+        const renderCard = (item, side) => {
+          const card = document.createElement("div");
+          card.className = `compare-card${comparison.winner === side ? " active" : ""}`;
+
+          const head = document.createElement("div");
+          head.className = "compare-head";
+
+          const titleWrap = document.createElement("div");
+          const title = document.createElement("div");
+          title.className = "compare-title";
+          title.textContent = `${item.action} | ${item.setup_quality} setup`;
+          const meta = document.createElement("div");
+          meta.className = "compare-meta";
+          meta.textContent = `${new Date(item.saved_at).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })} | ${item.source}`;
+          titleWrap.appendChild(title);
+          titleWrap.appendChild(meta);
+
+          const badge = document.createElement("div");
+          badge.className = "badge";
+          badge.textContent = comparison.winner === side ? "Stronger now" : "Saved";
+          head.appendChild(titleWrap);
+          head.appendChild(badge);
+
+          const rows = document.createElement("div");
+          rows.className = "compare-rows";
+          [
+            ["Mode", userModeLabel(item.user_mode || "balanced")],
+            ["Risk", item.risk_level.toUpperCase()],
+            ["Trust", item.trust_recommendation],
+            ["Reward / Risk", fmtRiskReward(item.risk_reward_ratio)],
+            ["Entry", fmtTradeLevel(item.entry_level)],
+            ["Target", fmtTradeLevel(item.target_level)],
+          ].forEach(([labelText, valueText]) => {
+            const row = document.createElement("div");
+            row.className = "compare-row";
+            const label = document.createElement("span");
+            label.textContent = labelText;
+            const value = document.createElement("strong");
+            value.textContent = valueText;
+            row.appendChild(label);
+            row.appendChild(value);
+            rows.appendChild(row);
+          });
+
+          const copy = document.createElement("div");
+          copy.className = "history-copy";
+          copy.textContent = item.guidance || item.summary;
+
+          card.appendChild(head);
+          card.appendChild(rows);
+          card.appendChild(copy);
+          grid.appendChild(card);
+        };
+
+        renderCard(leftItem, "left");
+        renderCard(rightItem, "right");
       }
 
       function renderAlertFeed(items) {
@@ -2405,6 +2683,16 @@
         const nextPrefs = { bias_flip_enabled: Boolean(event.target.checked) };
         persistAlertPrefs(nextPrefs);
         renderAlertPrefs();
+      });
+      document.getElementById("compareSetupLeft").addEventListener("change", (event) => {
+        const current = loadSavedCompare();
+        persistSavedCompare({ left_id: event.target.value, right_id: current.right_id });
+        renderSavedSetups(loadSavedSetups());
+      });
+      document.getElementById("compareSetupRight").addEventListener("change", (event) => {
+        const current = loadSavedCompare();
+        persistSavedCompare({ left_id: current.left_id, right_id: event.target.value });
+        renderSavedSetups(loadSavedSetups());
       });
       document.querySelectorAll(".mode-button").forEach((button) => {
         button.addEventListener("click", () => {

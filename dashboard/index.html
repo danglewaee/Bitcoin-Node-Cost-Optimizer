@@ -1571,6 +1571,27 @@
         localStorage.removeItem(PINNED_SETUP_KEY);
       }
 
+      function loadPinnedSetup() {
+        const pinnedId = loadPinnedSetupId();
+        if (!pinnedId) {
+          return null;
+        }
+        return loadSavedSetups().find((item) => item.id === pinnedId) || null;
+      }
+
+      function pinnedSetupMatchesContext(source, lookback, forecast_horizon) {
+        const pinned = loadPinnedSetup();
+        if (!pinned) {
+          return { pinned: null, matches: true };
+        }
+        const matches = (
+          (pinned.source || "") === (source || "") &&
+          Number(pinned.lookback || 0) === Number(lookback || 0) &&
+          Number(pinned.forecast_horizon || 0) === Number(forecast_horizon || 0)
+        );
+        return { pinned, matches };
+      }
+
       function trustRecommendation(report) {
         return report && report.shadow_comparison ? report.shadow_comparison.recommendation : "";
       }
@@ -1928,6 +1949,13 @@
         trust.className = "history-copy";
         trust.textContent = `${pinnedItem.trust_recommendation} | ${pinnedItem.trust_summary}`;
 
+        const watchContext = document.createElement("div");
+        watchContext.className = "history-copy";
+        const watchMatch = pinnedSetupMatchesContext(dataSource, Number(document.getElementById("lookback").value || 48), Number(document.getElementById("horizon").value || 6));
+        watchContext.textContent = watchMatch.matches
+          ? "Bias flip alerts are following this watch right now."
+          : "Bias flip alerts are pinned to this watch, but the page is on a different lens right now.";
+
         const rows = document.createElement("div");
         rows.className = "compare-rows";
         [
@@ -1969,6 +1997,7 @@
         card.appendChild(head);
         card.appendChild(summary);
         card.appendChild(trust);
+        card.appendChild(watchContext);
         card.appendChild(rows);
         card.appendChild(actions);
         root.appendChild(card);
@@ -2182,6 +2211,7 @@
           persistPinnedSetupId(nextItem.id);
         }
         renderSavedSetups(existing);
+        renderAlertPrefs();
         setStatus(true, "Setup Saved");
       }
 
@@ -2192,6 +2222,7 @@
         }
         persistSavedSetups(nextItems);
         renderSavedSetups(nextItems);
+        renderAlertPrefs();
         setStatus(true, "Setup Removed");
       }
 
@@ -2203,12 +2234,14 @@
         }
         persistPinnedSetupId(setupId);
         renderSavedSetups(loadSavedSetups());
+        renderAlertPrefs();
         setStatus(true, "Watching Setup");
       }
 
       function unpinSavedSetup() {
         persistPinnedSetupId("");
         renderSavedSetups(loadSavedSetups());
+        renderAlertPrefs();
         setStatus(true, "Watch Cleared");
       }
 
@@ -2249,6 +2282,7 @@
       function maybeTriggerBiasFlipAlert({ summary, latest, prediction, backtest, lookback, forecast_horizon, source }) {
         const prefs = loadAlertPrefs();
         const contextKey = `${source || "default"}|${lookback}|${forecast_horizon}`;
+        const watchContext = pinnedSetupMatchesContext(source, lookback, forecast_horizon);
         const state = loadLastBiasState();
         const previous = state[contextKey];
 
@@ -2260,7 +2294,7 @@
         };
         persistLastBiasState(state);
 
-        if (!prefs.bias_flip_enabled || !previous || previous.bias === prediction.bias) {
+        if (!prefs.bias_flip_enabled || !watchContext.matches || !previous || previous.bias === prediction.bias) {
           return;
         }
 
@@ -2436,10 +2470,19 @@
 
       function renderAlertPrefs() {
         const prefs = loadAlertPrefs();
+        const lookback = Number(document.getElementById("lookback").value || 48);
+        const forecast_horizon = Number(document.getElementById("horizon").value || 6);
+        const watchContext = pinnedSetupMatchesContext(dataSource, lookback, forecast_horizon);
         document.getElementById("biasFlipAlerts").checked = Boolean(prefs.bias_flip_enabled);
-        document.getElementById("alertState").textContent = prefs.bias_flip_enabled
-          ? "Bias flip alerts are on. The page will flag when the live read changes direction."
-          : "Bias flip alerts are off. Turn them on if you want the page to watch for live bias changes.";
+        if (!prefs.bias_flip_enabled) {
+          document.getElementById("alertState").textContent = "Bias flip alerts are off. Turn them on if you want the page to watch for live bias changes.";
+        } else if (!watchContext.pinned) {
+          document.getElementById("alertState").textContent = "Bias flip alerts are on for the current live lens. Pin a watch if you want alerts to follow one saved setup only.";
+        } else if (watchContext.matches) {
+          document.getElementById("alertState").textContent = `Bias flip alerts are on and following your watch: ${watchContext.pinned.source} | ${watchContext.pinned.lookback}/${watchContext.pinned.forecast_horizon}.`;
+        } else {
+          document.getElementById("alertState").textContent = `Bias flip alerts are pinned to your watch (${watchContext.pinned.source} | ${watchContext.pinned.lookback}/${watchContext.pinned.forecast_horizon}), but this page is on a different lens right now.`;
+        }
         updateBrowserAlertState();
       }
 
@@ -2772,6 +2815,8 @@
       async function runForecast() {
         try {
           saveApiKey();
+          renderSavedSetups(loadSavedSetups());
+          renderAlertPrefs();
           const lookback = Number(document.getElementById("lookback").value || 48);
           const forecast_horizon = Number(document.getElementById("horizon").value || 6);
           const scopedParams = { source: dataSource };

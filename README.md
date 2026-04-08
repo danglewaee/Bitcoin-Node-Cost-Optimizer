@@ -116,6 +116,7 @@ The dashboard now also separates `feed down` from `trust warming up`, so a user 
 The dashboard also includes a compact `soft glossary` for `setup quality`, `risk level`, `edge`, and `trust`, kept collapsed by default so the main flow stays clean.
 The dashboard can now compare two local `saved setups` side by side, so a user can quickly decide which saved read looks cleaner, safer, and more trustworthy right now.
 The dashboard can also pin one local saved setup as `My watch`, keeping a single read at the top so a user has one clear setup to keep returning to.
+When `My watch` is pinned, `bias flip alerts` now follow that watch context only; if the page is looking at a different source/lookback/horizon, the UI explains that alerts are still tied to the pinned watch instead of firing on the wrong lens.
 
 Example prediction request:
 ```bash

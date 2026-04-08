@@ -115,6 +115,7 @@ The dashboard now also shows a short dismissible onboarding note so a new user s
 The dashboard now also separates `feed down` from `trust warming up`, so a user can tell whether the live pipeline is unreachable or whether the trust layer simply needs more candle history.
 The dashboard also includes a compact `soft glossary` for `setup quality`, `risk level`, `edge`, and `trust`, kept collapsed by default so the main flow stays clean.
 The dashboard can now compare two local `saved setups` side by side, so a user can quickly decide which saved read looks cleaner, safer, and more trustworthy right now.
+The dashboard can also pin one local saved setup as `My watch`, keeping a single read at the top so a user has one clear setup to keep returning to.
 
 Example prediction request:
 ```bash

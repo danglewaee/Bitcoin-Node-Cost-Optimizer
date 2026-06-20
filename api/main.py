@@ -14,7 +14,6 @@ from database import Base, DATABASE_URL, engine, get_db
 from engines.base import BaseSignalEngine
 from engines.registry import get_signal_engine
 from models import PredictionSignal, PriceCandle
-from models import PredictionSignal, PriceCandle
 from schemas import (
     ActionReadOut,
     BacktestReportOut,

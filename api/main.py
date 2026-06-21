@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Response, st
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session
 
 from database import Base, DATABASE_URL, engine, get_db
 from engines.base import BaseSignalEngine
